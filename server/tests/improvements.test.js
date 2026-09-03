@@ -129,10 +129,19 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(res.text).toContain('COSMETIC');
     });
 
-    it('Bulk uploads products with validation and category auto-resolution', async () => {
+    it('Rejects non-admin bulk upload with 403 Forbidden', async () => {
       const res = await request(app)
         .post('/api/v1/products/bulk-upload')
         .set('Authorization', `Bearer ${pharmacistToken}`)
+        .send({ products: [{ name: 'Test Drug', unit_price: 10 }] });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('Admin bulk uploads products with validation and category auto-resolution', async () => {
+      const res = await request(app)
+        .post('/api/v1/products/bulk-upload')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({
           products: [
             {
@@ -160,6 +169,34 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(res.body.success).toBe(true);
       expect(res.body.data.successCount).toBe(2);
       expect(res.body.data.failedCount).toBe(0);
+    });
+
+    it('Admin bulk receives multiple inventory items into store', async () => {
+      const res = await request(app)
+        .post('/api/v1/inventory/bulk-receive')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          items: [
+            {
+              product_id: testProductId,
+              batch_number: 'BULK-TEST-001',
+              quantity: 50,
+              shelf_location: 'Bay A',
+              supplier_name: 'Test Pharma Supplier',
+            },
+            {
+              product_id: testProductId,
+              batch_number: 'BULK-TEST-002',
+              quantity: 25,
+              shelf_location: 'Bay B',
+              supplier_name: 'Test Pharma Supplier',
+            },
+          ],
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.count).toBe(2);
     });
   });
 });

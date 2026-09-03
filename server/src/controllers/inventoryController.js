@@ -117,6 +117,105 @@ const addStock = async (req, res, next) => {
   }
 };
 
+// POST /api/v1/inventory/bulk-receive (Admin bulk receive items)
+const bulkReceiveStock = async (req, res, next) => {
+  try {
+    const { items } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION', message: 'Items array with at least one item is required' },
+      });
+    }
+
+    const processed = [];
+
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const {
+          product_id,
+          batch_number,
+          expiry_date,
+          quantity,
+          shelf_location,
+          supplier_name,
+          location = 'STORE',
+          notes,
+        } = item;
+
+        if (!product_id || !quantity || parseInt(quantity) <= 0) {
+          throw new AppError(`Item #${i + 1}: Valid product and quantity greater than 0 are required`, 400);
+        }
+
+        const parsedQty = parseInt(quantity);
+        const batchNum = batch_number ? String(batch_number).trim() : '';
+
+        const existing = await tx.inventory.findUnique({
+          where: {
+            product_id_location_batch_number: {
+              product_id,
+              location,
+              batch_number: batchNum,
+            },
+          },
+        });
+
+        let invRecord;
+        if (existing) {
+          invRecord = await tx.inventory.update({
+            where: { id: existing.id },
+            data: {
+              quantity: existing.quantity + parsedQty,
+              expiry_date: expiry_date ? new Date(expiry_date) : existing.expiry_date,
+              shelf_location: shelf_location || existing.shelf_location,
+              supplier_name: supplier_name || existing.supplier_name,
+              notes: notes || existing.notes,
+            },
+            include: { product: true },
+          });
+        } else {
+          invRecord = await tx.inventory.create({
+            data: {
+              product_id,
+              location,
+              batch_number: batchNum || null,
+              expiry_date: expiry_date ? new Date(expiry_date) : null,
+              quantity: parsedQty,
+              shelf_location: shelf_location || null,
+              supplier_name: supplier_name || null,
+              notes: notes || null,
+            },
+            include: { product: true },
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            user_id: req.user.id,
+            action: 'BULK_RECEIVE_STOCK',
+            entity_type: 'INVENTORY',
+            entity_id: invRecord.id,
+            details: { product_id, quantity: parsedQty, batch_number: batchNum, location },
+          },
+        });
+
+        processed.push(invRecord);
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      data: processed,
+      count: processed.length,
+      message: `Successfully received ${processed.length} items into inventory`,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // PUT /api/v1/inventory/:id (Adjust stock)
 const adjustStock = async (req, res, next) => {
   try {
@@ -349,7 +448,7 @@ const getProductBatches = async (req, res, next) => {
 };
 
 module.exports = {
-  getInventory, addStock, adjustStock, transferStock,
+  getInventory, addStock, bulkReceiveStock, adjustStock, transferStock,
   getTransfers, getStoreInventory, getDispensaryInventory,
   getProductBatches,
 };

@@ -8,6 +8,7 @@ import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { Badge } from '../../components/ui/Badge';
 import { Alert } from '../../components/ui/Alert';
+import { useAuth } from '../../context/AuthContext';
 import {
   Boxes,
   ArrowRightLeft,
@@ -19,10 +20,14 @@ import {
   Warehouse,
   Store,
   CheckCircle,
+  Layers,
+  Trash2,
 } from 'lucide-react';
 
 export const InventoryPage = () => {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
 
   const [activeTab, setActiveTab] = useState('STORE'); // 'STORE', 'DISPENSARY', 'TRANSFERS'
   const [inventoryList, setInventoryList] = useState([]);
@@ -38,9 +43,16 @@ export const InventoryPage = () => {
 
   // Modals
   const [receiveModalOpen, setReceiveModalOpen] = useState(false);
+  const [bulkReceiveModalOpen, setBulkReceiveModalOpen] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [adjustModalOpen, setAdjustModalOpen] = useState(false);
   const [selectedItemForAdjust, setSelectedItemForAdjust] = useState(null);
+
+  // Bulk Receive State (Admin)
+  const [bulkItems, setBulkItems] = useState([
+    { product_id: '', batch_number: '', expiry_date: '', quantity: '', shelf_location: '', supplier_name: '', notes: '' },
+  ]);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
 
   // Receive Form
   const [receiveForm, setReceiveForm] = useState({
@@ -173,6 +185,53 @@ export const InventoryPage = () => {
       }
     } catch (err) {
       setErrorMessage(err.response?.data?.error?.message || 'Failed to receive stock');
+    }
+  };
+
+  const handleAddBulkRow = () => {
+    setBulkItems((prev) => [
+      ...prev,
+      { product_id: '', batch_number: '', expiry_date: '', quantity: '', shelf_location: '', supplier_name: '', notes: '' },
+    ]);
+  };
+
+  const handleUpdateBulkRow = (idx, field, val) => {
+    setBulkItems((prev) => {
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], [field]: val };
+      return updated;
+    });
+  };
+
+  const handleRemoveBulkRow = (idx) => {
+    if (bulkItems.length === 1) return;
+    setBulkItems((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleBulkReceiveSubmit = async (e) => {
+    e.preventDefault();
+    const validItems = bulkItems.filter((i) => i.product_id && parseInt(i.quantity) > 0);
+    if (validItems.length === 0) {
+      setErrorMessage('Please select a product and enter a quantity greater than 0 for at least one item');
+      return;
+    }
+
+    setBulkSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const res = await api.post('/inventory/bulk-receive', { items: validItems });
+      if (res.data.success) {
+        setSuccessMessage(res.data.message);
+        setBulkReceiveModalOpen(false);
+        setBulkItems([
+          { product_id: '', batch_number: '', expiry_date: '', quantity: '', shelf_location: '', supplier_name: '', notes: '' },
+        ]);
+        fetchInventory();
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Failed to bulk receive stock');
+    } finally {
+      setBulkSubmitting(false);
     }
   };
 
@@ -354,6 +413,16 @@ export const InventoryPage = () => {
           </p>
         </div>
         <div className="flex items-center space-x-2.5">
+          {isAdmin && (
+            <Button
+              variant="outline"
+              onClick={() => setBulkReceiveModalOpen(true)}
+              className="text-xs font-bold px-4 py-2.5 shadow-2xs border-slate-200 hover:bg-slate-50 text-slate-700"
+            >
+              <Layers className="w-4 h-4 mr-1.5 text-[#5345E6]" />
+              Bulk Receive
+            </Button>
+          )}
           <Button
             onClick={() => setReceiveModalOpen(true)}
             className="text-xs font-bold px-4 py-2.5 shadow-xs"
@@ -515,6 +584,140 @@ export const InventoryPage = () => {
           <Button type="submit" className="w-full py-2.5 font-semibold mt-2">
             Confirm & Add to Store
           </Button>
+        </form>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* Bulk Receive Stock Modal (Admin Only)                                    */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={bulkReceiveModalOpen}
+        onClose={() => setBulkReceiveModalOpen(false)}
+        title="Bulk Receive Stock (Admin)"
+        maxWidth="max-w-5xl"
+      >
+        <form onSubmit={handleBulkReceiveSubmit} className="space-y-4">
+          <p className="text-xs text-slate-500">
+            Receive multiple products and batches into Store warehouse simultaneously.
+          </p>
+
+          <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+            {bulkItems.map((item, idx) => (
+              <div
+                key={idx}
+                className="p-3.5 bg-slate-50/70 border border-slate-200/80 rounded-2xl space-y-3 relative group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-slate-800">
+                    Item #{idx + 1}
+                  </span>
+                  {bulkItems.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveBulkRow(idx)}
+                      className="text-xs text-rose-500 hover:text-rose-700 font-semibold flex items-center"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <Select
+                      label="Product"
+                      required
+                      value={item.product_id}
+                      onChange={(e) => handleUpdateBulkRow(idx, 'product_id', e.target.value)}
+                      placeholder="Select Product..."
+                      options={productsList.map((p) => ({
+                        value: p.id,
+                        label: `${p.name} (${p.dosage_form || p.strength || 'Unit'})`,
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      label="Quantity"
+                      type="number"
+                      required
+                      min="1"
+                      placeholder="Units"
+                      value={item.quantity}
+                      onChange={(e) => handleUpdateBulkRow(idx, 'quantity', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <Input
+                      label="Batch Number"
+                      placeholder="e.g. BATCH-01"
+                      value={item.batch_number}
+                      onChange={(e) => handleUpdateBulkRow(idx, 'batch_number', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      label="Expiry Date"
+                      type="date"
+                      value={item.expiry_date}
+                      onChange={(e) => handleUpdateBulkRow(idx, 'expiry_date', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      label="Shelf Location"
+                      placeholder="e.g. Bay 2"
+                      value={item.shelf_location}
+                      onChange={(e) => handleUpdateBulkRow(idx, 'shelf_location', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      label="Supplier"
+                      placeholder="e.g. MedSupply"
+                      value={item.supplier_name}
+                      onChange={(e) => handleUpdateBulkRow(idx, 'supplier_name', e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleAddBulkRow}
+              className="text-xs"
+            >
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add Another Item
+            </Button>
+
+            <div className="flex items-center space-x-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setBulkReceiveModalOpen(false)}
+                className="text-xs"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                isLoading={bulkSubmitting}
+                className="text-xs font-bold px-5 bg-[#5345E6] hover:bg-[#4336D6] text-white rounded-xl"
+              >
+                Confirm Bulk Receive ({bulkItems.filter((i) => i.product_id && parseInt(i.quantity) > 0).length} Items)
+              </Button>
+            </div>
+          </div>
         </form>
       </Modal>
 

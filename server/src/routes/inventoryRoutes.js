@@ -13,6 +13,7 @@ router.post('/transfer', requireRole(['ADMIN', 'PHARMACIST']), ctrl.transferStoc
 
 router.get('/', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getInventory);
 router.post('/', requireRole(['ADMIN', 'PHARMACIST']), ctrl.addStock);
+router.post('/bulk-receive', requireRole(['ADMIN']), ctrl.bulkReceiveStock);
 router.put('/:id', requireRole(['ADMIN', 'PHARMACIST']), ctrl.adjustStock);
 
 module.exports = router;

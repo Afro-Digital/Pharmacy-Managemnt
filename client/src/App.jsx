@@ -13,6 +13,7 @@ import { ReportsPage } from './pages/reports/ReportsPage';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { UsersPage } from './pages/users/UsersPage';
 import { MobileRxUploadPage } from './pages/prescriptions/MobileRxUploadPage';
+import { OrdersPage } from './pages/orders/OrdersPage';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -58,6 +59,7 @@ export default function App() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="orders" element={<OrdersPage />} />
         <Route path="pos" element={<POSPage />} />
         <Route
           path="inventory"

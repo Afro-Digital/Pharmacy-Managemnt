@@ -22,12 +22,13 @@ import {
   CheckCircle2,
   AlertCircle,
   Check,
+  Eye,
 } from 'lucide-react';
 
 export const ProductsPage = () => {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const canEditProducts = user && ['ADMIN', 'PHARMACIST'].includes(user.role);
+  const canEditProducts = user && user.role === 'ADMIN';
 
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -40,7 +41,11 @@ export const ProductsPage = () => {
   const [typeFilter, setTypeFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
 
-  // Modal & Form
+  // View Details Modal (All users)
+  const [viewModalOpen, setViewModalOpen] = useState(false);
+  const [selectedProductForView, setSelectedProductForView] = useState(null);
+
+  // Modal & Form (Admin only)
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
 
@@ -356,21 +361,34 @@ export const ProductsPage = () => {
     },
   ];
 
-  if (canEditProducts) {
-    columns.push({
-      header: 'Actions',
-      accessor: 'actions',
-      render: (row) => (
-        <div className="flex items-center space-x-1.5">
-          <button
-            type="button"
-            onClick={() => openEditModal(row)}
-            className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-[#5345E6] flex items-center justify-center transition-colors"
-            title="Edit Product"
-          >
-            <Edit2 className="w-3.5 h-3.5" />
-          </button>
-          {user.role === 'ADMIN' && (
+  const openViewModal = (product) => {
+    setSelectedProductForView(product);
+    setViewModalOpen(true);
+  };
+
+  columns.push({
+    header: 'Actions',
+    accessor: 'actions',
+    render: (row) => (
+      <div className="flex items-center space-x-1.5">
+        <button
+          type="button"
+          onClick={() => openViewModal(row)}
+          className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-[#5345E6] flex items-center justify-center transition-colors"
+          title="View Product Details"
+        >
+          <Eye className="w-3.5 h-3.5" />
+        </button>
+        {canEditProducts && (
+          <>
+            <button
+              type="button"
+              onClick={() => openEditModal(row)}
+              className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-[#5345E6] flex items-center justify-center transition-colors"
+              title="Edit Product"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
             <button
               type="button"
               onClick={() => handleDelete(row.id, row.name)}
@@ -379,11 +397,11 @@ export const ProductsPage = () => {
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
-          )}
-        </div>
-      ),
-    });
-  }
+          </>
+        )}
+      </div>
+    ),
+  });
 
   return (
     <div className="space-y-6">
@@ -740,7 +758,7 @@ export const ProductsPage = () => {
               type="button"
               onClick={handleExecuteBulkImport}
               disabled={isImporting || parsedRows.filter((r) => r.isValid).length === 0}
-              className="w-full py-2.5 font-bold bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+              className="w-full py-2.5 font-bold bg-[#5345E6] hover:bg-[#4336D6] disabled:opacity-50 text-white rounded-xl"
             >
               {isImporting ? (
                 <>
@@ -753,6 +771,124 @@ export const ProductsPage = () => {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* View Product Details Modal (Accessible to All Roles)                     */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={viewModalOpen}
+        onClose={() => setViewModalOpen(false)}
+        title="Product Specifications & Details"
+        maxWidth="max-w-2xl"
+      >
+        {selectedProductForView && (
+          <div className="space-y-5">
+            {/* Header with thumbnail & badges */}
+            <div className="flex items-start justify-between p-4 bg-[#F4F5FA] rounded-2xl border border-slate-100">
+              <div className="flex items-center space-x-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200/70 flex items-center justify-center text-[#5345E6] shadow-xs">
+                  <Package className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    {selectedProductForView.name}
+                  </h3>
+                  {selectedProductForView.name_am && (
+                    <p className="text-xs text-slate-500 font-ethiopic">
+                      {selectedProductForView.name_am}
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">
+                    {selectedProductForView.generic_name || selectedProductForView.brand || 'Standard Item'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-end space-y-1">
+                <Badge variant={selectedProductForView.product_type === 'MEDICINE' ? 'primary' : 'info'}>
+                  {selectedProductForView.product_type}
+                </Badge>
+                <Badge variant={selectedProductForView.requires_prescription ? 'warning' : 'neutral'}>
+                  {selectedProductForView.requires_prescription ? 'Prescription Required' : 'Over-the-Counter'}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Specifications Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+              <div className="p-3 bg-white rounded-xl border border-slate-100">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Unit Price</span>
+                <span className="text-base font-extrabold text-slate-900 mt-0.5 block">
+                  ETB {parseFloat(selectedProductForView.unit_price).toFixed(2)}
+                </span>
+              </div>
+              <div className="p-3 bg-white rounded-xl border border-slate-100">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Category</span>
+                <span className="text-sm font-bold text-slate-800 mt-0.5 block">
+                  {selectedProductForView.category?.name || 'Unassigned'}
+                </span>
+              </div>
+              <div className="p-3 bg-white rounded-xl border border-slate-100">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Reorder Threshold</span>
+                <span className="text-sm font-bold text-slate-800 mt-0.5 block">
+                  {selectedProductForView.reorder_level} units
+                </span>
+              </div>
+              <div className="p-3 bg-white rounded-xl border border-slate-100">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Barcode / SKU</span>
+                <span className="text-xs font-mono font-medium text-slate-700 mt-0.5 block truncate">
+                  {selectedProductForView.barcode || 'None (Auto-generated)'}
+                </span>
+              </div>
+              <div className="p-3 bg-white rounded-xl border border-slate-100">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Strength</span>
+                <span className="text-xs font-medium text-slate-800 mt-0.5 block">
+                  {selectedProductForView.strength || 'Standard'}
+                </span>
+              </div>
+              <div className="p-3 bg-white rounded-xl border border-slate-100">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Dosage Form</span>
+                <span className="text-xs font-medium text-slate-800 mt-0.5 block">
+                  {selectedProductForView.dosage_form || 'Unit'}
+                </span>
+              </div>
+            </div>
+
+            {selectedProductForView.description && (
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 text-xs">
+                <span className="text-slate-400 font-semibold block uppercase text-[10px] mb-1">
+                  Product Notes & Clinical Guidelines
+                </span>
+                <p className="text-slate-700 leading-relaxed">
+                  {selectedProductForView.description}
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setViewModalOpen(false)}
+                className="text-xs"
+              >
+                Close
+              </Button>
+              {canEditProducts && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setViewModalOpen(false);
+                    openEditModal(selectedProductForView);
+                  }}
+                  className="text-xs"
+                >
+                  <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit Product
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

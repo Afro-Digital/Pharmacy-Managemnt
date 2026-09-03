@@ -32,20 +32,7 @@ const getSales = async (req, res, next) => {
       ];
     }
 
-    // Role-based filtering:
-    // Cashier can see all PENDING_PAYMENT orders in store queue, but past sales restricted to own
-    if (req.user.role === 'CASHIER') {
-      if (status === 'PENDING_PAYMENT') {
-        where.status = 'PENDING_PAYMENT';
-      } else if (!status) {
-        where.OR = [
-          { status: 'PENDING_PAYMENT' },
-          { cashier_id: req.user.id },
-        ];
-      } else {
-        where.cashier_id = req.user.id;
-      }
-    }
+    // All roles (ADMIN, PHARMACIST, CASHIER) can view complete order history
 
     const [sales, total] = await Promise.all([
       prisma.sale.findMany({

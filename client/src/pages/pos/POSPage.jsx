@@ -232,15 +232,19 @@ export const POSPage = () => {
 
   const addCashierPaymentSplit = () => {
     if (!selectedPendingOrder) return;
-    const defaultMethod = paymentMethods.find((m) => m.code === 'TELEBIRR') || paymentMethods[0];
     const currentPaid = cashierPayments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-    const remaining = Math.max(0, parseFloat(selectedPendingOrder.total_amount) - currentPaid);
+    const totalDue = parseFloat(selectedPendingOrder.total_amount);
+    const remaining = Math.max(0, parseFloat((totalDue - currentPaid).toFixed(2)));
+
+    // Pick first unused payment method
+    const usedMethodIds = new Set(cashierPayments.map((p) => p.payment_method_id));
+    const nextUnusedMethod = paymentMethods.find((m) => !usedMethodIds.has(m.id)) || paymentMethods[0];
 
     setCashierPayments([
       ...cashierPayments,
       {
-        payment_method_id: defaultMethod?.id || '',
-        amount: remaining,
+        payment_method_id: nextUnusedMethod?.id || '',
+        amount: remaining > 0 ? remaining : '',
         reference_number: '',
       },
     ]);
@@ -259,17 +263,29 @@ export const POSPage = () => {
   // Cashier: Confirm payment & print receipt
   const handleConfirmPayment = async () => {
     if (!selectedPendingOrder) return;
-    setLoading(true);
-    setErrorMessage(null);
+
+    // Check duplicate payment methods
+    const methodIds = cashierPayments.map((p) => p.payment_method_id).filter(Boolean);
+    if (new Set(methodIds).size !== methodIds.length) {
+      setErrorMessage('Duplicate payment method detected. Each split payment must use a different payment method.');
+      return;
+    }
 
     const paidSum = cashierPayments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
     const totalDue = parseFloat(selectedPendingOrder.total_amount);
 
     if (paidSum < totalDue - 0.01) {
-      setErrorMessage(`Payments total (${paidSum.toFixed(2)} ETB) does not cover total amount (${totalDue.toFixed(2)} ETB)`);
-      setLoading(false);
+      setErrorMessage(`Payments total (${paidSum.toFixed(2)} ETB) is less than the required amount (${totalDue.toFixed(2)} ETB). Remaining balance: ${(totalDue - paidSum).toFixed(2)} ETB.`);
       return;
     }
+
+    if (paidSum > totalDue + 0.01) {
+      setErrorMessage(`Payments total (${paidSum.toFixed(2)} ETB) exceeds the required order amount (${totalDue.toFixed(2)} ETB) by ${(paidSum - totalDue).toFixed(2)} ETB.`);
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
 
     try {
       const res = await api.post(`/sales/${selectedPendingOrder.id}/pay`, {
@@ -627,146 +643,226 @@ export const POSPage = () => {
       {/* ========================================================================= */}
       {/* CASHIER WORKFLOW: Pending Orders Queue & Payment Confirmation            */}
       {/* ========================================================================= */}
-      {activeMode === 'CASHIER' && (
-        <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-12rem)]">
-          {/* Left Column: Pending Orders Queue */}
-          <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 p-4 min-w-0 overflow-hidden">
-            <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2.5">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center">
-                  <Clock className="w-4 h-4 mr-2 text-amber-500" />
-                  {t('pos.pending_orders')} ({pendingOrders.length})
-                </h3>
-                <p className="text-xs text-slate-400">
-                  Pharmacist-approved orders waiting for customer payment
-                </p>
+      {activeMode === 'CASHIER' && (() => {
+        const totalDue = selectedPendingOrder ? parseFloat(selectedPendingOrder.total_amount) : 0;
+        const totalPaid = cashierPayments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+        const remainingBalance = totalDue - totalPaid;
+        const isOverpaid = totalPaid > totalDue + 0.01;
+        const isUnderpaid = totalPaid < totalDue - 0.01;
+        const isExactMatch = !isOverpaid && !isUnderpaid;
+
+        const usedMethodIds = cashierPayments.map((p) => p.payment_method_id).filter(Boolean);
+        const hasDuplicateMethod = new Set(usedMethodIds).size !== usedMethodIds.length;
+        const hasInvalidRow = cashierPayments.some(
+          (p) => !p.payment_method_id || !p.amount || parseFloat(p.amount) <= 0
+        );
+        const canConfirm = selectedPendingOrder && isExactMatch && !hasDuplicateMethod && !hasInvalidRow;
+
+        return (
+          <div className="max-w-6xl mx-auto w-full flex flex-col lg:flex-row gap-5 h-[calc(100vh-9.5rem)]">
+            {/* Left Column: Pending Orders Queue */}
+            <div className="flex-1 flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm p-5 min-w-0 overflow-hidden">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-3 flex-shrink-0">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 flex items-center">
+                    <Clock className="w-4 h-4 mr-2 text-amber-500" />
+                    {t('pos.pending_orders')} ({pendingOrders.length})
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Pharmacist-approved orders waiting for customer payment
+                  </p>
+                </div>
+                <Badge variant="warning">{t('pos.awaiting_payment')}</Badge>
               </div>
-              <Badge variant="warning">{t('pos.awaiting_payment')}</Badge>
+
+              <div className="flex-1 overflow-y-auto divide-y divide-slate-100 pr-1">
+                {pendingOrders.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 py-16">
+                    <Clock className="w-12 h-12 mb-3 stroke-1 text-slate-300 animate-pulse" />
+                    <p className="text-sm font-semibold text-slate-700">No pending orders in queue</p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                      Orders approved by the clinical pharmacist will automatically appear here for payment.
+                    </p>
+                  </div>
+                ) : (
+                  pendingOrders.map((order) => {
+                    const isSelected = selectedPendingOrder?.id === order.id;
+                    return (
+                      <div
+                        key={order.id}
+                        onClick={() => handleSelectPendingOrder(order)}
+                        className={`p-3.5 my-1.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                          isSelected
+                            ? 'bg-[#F0EEFA] border-[#5345E6] shadow-xs'
+                            : 'bg-slate-50/60 hover:bg-slate-100/80 border-slate-100'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-mono font-bold text-xs text-[#5345E6] bg-white px-2 py-0.5 rounded-lg border border-purple-200">
+                              {order.sale_number}
+                            </span>
+                            <span className="text-xs font-bold text-slate-800">
+                              {order.patient?.full_name || t('pos.walk_in_customer')}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            Approved by: <span className="font-semibold text-slate-700">{order.pharmacist?.full_name || 'Pharmacist'}</span> • {order.items?.length || 0} medications
+                          </p>
+                        </div>
+
+                        <div className="flex items-center space-x-3">
+                          <div className="text-right">
+                            <span className="text-base font-black text-slate-900">
+                              {parseFloat(order.total_amount).toFixed(2)} ETB
+                            </span>
+                            <p className="text-[10px] text-slate-400">
+                              {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
+                          <ArrowRight className={`w-4 h-4 ${isSelected ? 'text-[#5345E6]' : 'text-slate-300'}`} />
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 pr-1">
-              {pendingOrders.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 py-16">
-                  <Clock className="w-12 h-12 mb-3 stroke-1 text-slate-300 animate-pulse" />
-                  <p className="text-sm font-medium">No pending orders in queue</p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Orders approved by the pharmacist will automatically appear here.
+            {/* Right Column: Read-Only Order Review & Cashier Split Payment Form */}
+            <div className="w-full lg:w-[450px] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex-shrink-0">
+              {!selectedPendingOrder ? (
+                <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-8">
+                  <CreditCard className="w-12 h-12 mb-3 stroke-1 text-slate-300" />
+                  <p className="text-sm font-bold text-slate-700">Select an Order from Queue</p>
+                  <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                    Choose a pending order from the left to view customer items, configure split payments, and confirm receipt.
                   </p>
                 </div>
               ) : (
-                pendingOrders.map((order) => {
-                  const isSelected = selectedPendingOrder?.id === order.id;
-                  return (
-                    <div
-                      key={order.id}
-                      onClick={() => handleSelectPendingOrder(order)}
-                      className={`p-3.5 my-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                        isSelected
-                          ? 'bg-blue-50/80 border-blue-500 shadow-xs'
-                          : 'bg-slate-50/60 hover:bg-slate-100/80 border-slate-200/70'
-                      }`}
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-mono font-bold text-xs text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded">
-                            {order.sale_number}
-                          </span>
-                          <span className="text-xs font-semibold text-slate-800">
-                            {order.patient?.full_name || t('pos.walk_in_customer')}
-                          </span>
+                <>
+                  {/* Pinned Top: Order Header */}
+                  <div className="p-3.5 bg-slate-50/80 border-b border-slate-100 flex-shrink-0">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-mono font-bold text-slate-900">
+                          {selectedPendingOrder.sale_number}
+                        </span>
+                        <div className="flex items-center text-[10px] font-semibold text-[#5345E6] bg-purple-50 px-2 py-0.5 rounded-full">
+                          <Lock className="w-3 h-3 mr-1" /> Products Locked
                         </div>
-                        <p className="text-[11px] text-slate-500">
-                          {t('pos.approved_by')}: <span className="font-medium text-slate-700">{order.pharmacist?.full_name || 'Pharmacist'}</span> • {order.items?.length || 0} medications
-                        </p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => handleCancelOrder(selectedPendingOrder.id)}
+                        className="text-xs text-rose-500 hover:text-rose-700 font-semibold"
+                      >
+                        {t('pos.cancel_order')}
+                      </button>
+                    </div>
+                  </div>
 
-                      <div className="flex items-center space-x-3">
-                        <div className="text-right">
-                          <span className="text-base font-extrabold text-slate-900">
-                            {parseFloat(order.total_amount).toFixed(2)} ETB
-                          </span>
-                          <p className="text-[10px] text-slate-400">
-                            {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </p>
+                  {/* Compact Read-Only Items List */}
+                  <div className="px-3.5 py-2 border-b border-slate-100 max-h-28 overflow-y-auto space-y-1 bg-white flex-shrink-0">
+                    {selectedPendingOrder.items?.map((item, i) => (
+                      <div key={i} className="flex justify-between items-center text-xs">
+                        <div className="truncate pr-2">
+                          <span className="font-semibold text-slate-800 truncate block">{item.product?.name}</span>
+                          <span className="text-slate-400 text-[10px]">Batch: {item.batch_number || 'GEN'}</span>
                         </div>
-                        <ArrowRight className={`w-4 h-4 ${isSelected ? 'text-blue-600' : 'text-slate-300'}`} />
+                        <span className="font-mono text-slate-700 whitespace-nowrap text-[11px]">
+                          {item.quantity} × {parseFloat(item.unit_price).toFixed(2)} = {parseFloat(item.total_price).toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Price & Balance Countdown Banner */}
+                  <div className="p-3.5 bg-[#F8F9FD] border-b border-slate-100 flex-shrink-0 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Due</span>
+                        <span className="text-xl font-black text-slate-900">
+                          {totalDue.toFixed(2)} ETB
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Allocated</span>
+                        <span className="text-base font-bold text-slate-700">
+                          {totalPaid.toFixed(2)} ETB
+                        </span>
                       </div>
                     </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
 
-          {/* Right Column: Read-Only Order Review & Cashier Split Payment Form */}
-          <div className="w-full lg:w-96 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            {!selectedPendingOrder ? (
-              <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-8">
-                <CreditCard className="w-10 h-10 mb-2 stroke-1 text-slate-300" />
-                <p className="text-sm font-semibold text-slate-700">Select an order from the queue</p>
-                <p className="text-xs text-slate-400 mt-1 max-w-xs">
-                  Review the customer's approved items and process their payment.
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* Header with Locked Notice */}
-                <div className="p-4 bg-blue-50/70 border-b border-blue-100 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-bold text-blue-900">
-                      {selectedPendingOrder.sale_number}
-                    </span>
-                    <button
-                      onClick={() => handleCancelOrder(selectedPendingOrder.id)}
-                      className="text-xs text-rose-600 hover:text-rose-700 font-medium"
-                    >
-                      {t('pos.cancel_order')}
-                    </button>
+                    {/* Status Pill Badge */}
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 text-xs">
+                      <span className="font-medium text-slate-500">Balance Status:</span>
+                      {isExactMatch ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+                          Exact Match ({totalDue.toFixed(2)} ETB)
+                        </span>
+                      ) : isUnderpaid ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+                          Remaining: {remainingBalance.toFixed(2)} ETB
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-700">
+                          Exceeds by {(totalPaid - totalDue).toFixed(2)} ETB
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center text-[11px] font-semibold text-blue-700">
-                    <Lock className="w-3.5 h-3.5 mr-1" />
-                    {t('pos.locked_items_notice')}
-                  </div>
-                </div>
 
-                {/* Read-Only Items List */}
-                <div className="p-3.5 border-b border-slate-100 max-h-44 overflow-y-auto space-y-1.5 bg-slate-50/40">
-                  {selectedPendingOrder.items?.map((item, i) => (
-                    <div key={i} className="flex justify-between items-center text-xs">
-                      <div>
-                        <span className="font-semibold text-slate-800">{item.product?.name}</span>
-                        <span className="text-slate-400 text-[10px] block">Batch: {item.batch_number || 'GEN'}</span>
-                      </div>
-                      <span className="font-mono text-slate-700">
-                        {item.quantity} x {parseFloat(item.unit_price).toFixed(2)} = {parseFloat(item.total_price).toFixed(2)} ETB
+                  {/* Real-time Warning Alerts */}
+                  {hasDuplicateMethod && (
+                    <div className="mx-3.5 mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2 flex-shrink-0">
+                      <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Duplicate Payment Method:</strong> Each split payment must use a distinct method (e.g. Cash + Telebirr, not Cash twice).
                       </span>
                     </div>
-                  ))}
-                </div>
+                  )}
 
-                {/* Cashier Payment Form */}
-                <div className="flex-1 p-4 overflow-y-auto space-y-3">
-                  <div className="flex justify-between items-baseline p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                    <span className="text-xs font-semibold text-slate-600">{t('pos.total')} Due:</span>
-                    <span className="text-lg font-bold text-blue-700">
-                      {parseFloat(selectedPendingOrder.total_amount).toFixed(2)} ETB
-                    </span>
-                  </div>
+                  {isOverpaid && (
+                    <div className="mx-3.5 mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2 flex-shrink-0">
+                      <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Amount Exceeds Total:</strong> The entered split amounts exceed the required total by {(totalPaid - totalDue).toFixed(2)} ETB.
+                      </span>
+                    </div>
+                  )}
 
-                  {/* Payment Breakdown Rows */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                      {t('pos.payment_breakdown')}
-                    </label>
+                  {/* Middle Scrollable: Split Payment Rows */}
+                  <div className="flex-1 p-3.5 overflow-y-auto space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        {t('pos.payment_breakdown')} ({cashierPayments.length})
+                      </label>
+                      <button
+                        type="button"
+                        onClick={addCashierPaymentSplit}
+                        className="text-xs text-[#5345E6] hover:text-[#4336D6] font-bold flex items-center"
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        Add Split Payment
+                      </button>
+                    </div>
 
                     {cashierPayments.map((p, idx) => (
-                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                      <div
+                        key={idx}
+                        className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2 text-xs"
+                      >
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-slate-700">Method {idx + 1}</span>
+                          <span className="font-bold text-slate-700 text-[11px]">
+                            Payment Split #{idx + 1}
+                          </span>
                           {cashierPayments.length > 1 && (
                             <button
+                              type="button"
                               onClick={() => removeCashierPaymentRow(idx)}
-                              className="text-xs text-rose-600 hover:text-rose-700"
+                              className="text-xs text-rose-500 hover:text-rose-700 font-semibold"
                             >
                               Remove
                             </button>
@@ -781,46 +877,52 @@ export const POSPage = () => {
                           />
                           <Input
                             type="number"
+                            step="0.01"
+                            min="0"
                             value={p.amount}
                             onChange={(e) => updateCashierPaymentRow(idx, 'amount', e.target.value)}
-                            placeholder="Amount"
+                            placeholder="ETB Amount"
                           />
                         </div>
 
                         <Input
-                          placeholder={t('pos.ref_number')}
+                          placeholder="Transaction / Reference # (Optional)"
                           value={p.reference_number || ''}
                           onChange={(e) => updateCashierPaymentRow(idx, 'reference_number', e.target.value)}
                         />
                       </div>
                     ))}
-
-                    <button
-                      onClick={addCashierPaymentSplit}
-                      className="text-xs text-blue-600 hover:text-blue-700 font-semibold flex items-center pt-1"
-                    >
-                      <Plus className="w-3.5 h-3.5 mr-1" />
-                      {t('pos.add_payment_method')}
-                    </button>
                   </div>
-                </div>
 
-                {/* Cashier Submit Footer */}
-                <div className="p-4 bg-slate-50 border-t border-slate-200">
-                  <Button
-                    onClick={handleConfirmPayment}
-                    isLoading={loading}
-                    className="w-full py-3 text-sm font-bold shadow-md bg-emerald-600 hover:bg-emerald-700"
-                  >
-                    <CheckCircle2 className="w-4 h-4 mr-2" />
-                    {t('pos.confirm_payment')}
-                  </Button>
-                </div>
-              </>
-            )}
+                  {/* Pinned Bottom: Confirm Payment Button (Always Visible) */}
+                  <div className="p-3.5 bg-white border-t border-slate-100 flex-shrink-0">
+                    <Button
+                      onClick={handleConfirmPayment}
+                      disabled={!canConfirm}
+                      isLoading={loading}
+                      className="w-full py-3 text-sm font-bold shadow-xs bg-[#5345E6] hover:bg-[#4336D6] disabled:opacity-50 text-white rounded-xl"
+                    >
+                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                      Confirm Payment & Print Receipt
+                    </Button>
+                    {!canConfirm && (
+                      <p className="text-[11px] text-slate-400 text-center mt-1.5 font-medium">
+                        {hasDuplicateMethod
+                          ? 'Resolve duplicate payment methods to continue'
+                          : isUnderpaid
+                          ? `Collect remaining ${remainingBalance.toFixed(2)} ETB to confirm`
+                          : isOverpaid
+                          ? 'Adjust split amounts to match order total'
+                          : 'Ensure all split amounts are entered'}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Printable Receipt Modal */}
       <Modal

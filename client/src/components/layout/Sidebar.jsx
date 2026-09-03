@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   Package,
   ShoppingCart,
+  ShoppingBag,
   Boxes,
   FileText,
   Users,
@@ -35,6 +36,12 @@ export const Sidebar = ({ isOpen, onClose }) => {
       label: t('nav.products'),
       path: '/products',
       icon: Package,
+      roles: ['ADMIN', 'PHARMACIST', 'CASHIER'],
+    },
+    {
+      label: 'Order History',
+      path: '/orders',
+      icon: ShoppingBag,
       roles: ['ADMIN', 'PHARMACIST', 'CASHIER'],
     },
     {
