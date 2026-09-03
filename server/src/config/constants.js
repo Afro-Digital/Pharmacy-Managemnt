@@ -1,0 +1,25 @@
+module.exports = {
+  APP_DEFAULTS: {
+    NAME: 'TilexPharmacy',
+    CURRENCY: 'ETB',
+    DEFAULT_LANG: 'en',
+    TAX_RATE: 0.0, // No tax per PRD
+  },
+  ROLES: {
+    ADMIN: 'ADMIN',
+    PHARMACIST: 'PHARMACIST',
+    CASHIER: 'CASHIER',
+  },
+  PAGINATION: {
+    DEFAULT_PAGE: 1,
+    DEFAULT_LIMIT: 20,
+    MAX_LIMIT: 100,
+  },
+  SALE_NUMBER_PREFIX: 'SL',
+  PRESCRIPTION_NUMBER_PREFIX: 'RX',
+  LOCATIONS: {
+    STORE: 'STORE',
+    DISPENSARY: 'DISPENSARY',
+  },
+  EXPIRY_ALERT_DAYS: [30, 60, 90],
+};
