@@ -7,6 +7,7 @@ router.use(authenticate);
 
 router.get('/store', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getStoreInventory);
 router.get('/dispensary', ctrl.getDispensaryInventory);
+router.get('/batches', ctrl.getProductBatches);
 router.get('/transfers', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getTransfers);
 router.post('/transfer', requireRole(['ADMIN', 'PHARMACIST']), ctrl.transferStock);
 

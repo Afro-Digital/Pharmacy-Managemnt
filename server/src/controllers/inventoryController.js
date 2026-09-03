@@ -302,7 +302,54 @@ const getDispensaryInventory = async (req, res, next) => {
   return getInventory(req, res, next);
 };
 
+// GET /api/v1/inventory/batches?product_id=...&location=...
+const getProductBatches = async (req, res, next) => {
+  try {
+    const { product_id, location } = req.query;
+
+    if (!product_id) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION', message: 'product_id is required' },
+      });
+    }
+
+    const where = {
+      product_id,
+      quantity: { gt: 0 },
+    };
+
+    if (location) {
+      where.location = location;
+    }
+
+    const batches = await prisma.inventory.findMany({
+      where,
+      orderBy: { expiry_date: 'asc' }, // FEFO order
+      select: {
+        id: true,
+        batch_number: true,
+        location: true,
+        quantity: true,
+        expiry_date: true,
+        shelf_location: true,
+      },
+    });
+
+    res.json({
+      success: true,
+      data: batches,
+      count: batches.length,
+      isSingleBatch: batches.length === 1,
+      autoSelectedBatch: batches.length === 1 ? batches[0] : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getInventory, addStock, adjustStock, transferStock,
   getTransfers, getStoreInventory, getDispensaryInventory,
+  getProductBatches,
 };

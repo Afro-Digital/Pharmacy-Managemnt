@@ -18,6 +18,7 @@ import {
   Filter,
   Warehouse,
   Store,
+  CheckCircle,
 } from 'lucide-react';
 
 export const InventoryPage = () => {
@@ -61,10 +62,55 @@ export const InventoryPage = () => {
     quantity: '',
     notes: '',
   });
+  const [availableBatches, setAvailableBatches] = useState([]);
+  const [loadingBatches, setLoadingBatches] = useState(false);
 
   // Adjust Form
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
+
+  // Auto-resolve batches for inventory transfer
+  useEffect(() => {
+    if (!transferForm.product_id) {
+      setAvailableBatches([]);
+      return;
+    }
+
+    const fetchBatches = async () => {
+      setLoadingBatches(true);
+      try {
+        const res = await api.get('/inventory/batches', {
+          params: {
+            product_id: transferForm.product_id,
+            location: transferForm.from_location,
+          },
+        });
+        if (res.data.success) {
+          const batches = res.data.data;
+          setAvailableBatches(batches);
+          if (batches.length === 1) {
+            // Auto-select single batch
+            setTransferForm((prev) => ({
+              ...prev,
+              batch_number: batches[0].batch_number || '',
+            }));
+          } else {
+            // Multiple batches: prompt user by clearing or keeping selection if valid
+            setTransferForm((prev) => ({
+              ...prev,
+              batch_number: '',
+            }));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load batches:', err);
+      } finally {
+        setLoadingBatches(false);
+      }
+    };
+
+    fetchBatches();
+  }, [transferForm.product_id, transferForm.from_location]);
 
   const fetchInventory = async () => {
     try {
@@ -479,7 +525,14 @@ export const InventoryPage = () => {
             <Select
               label="From Location"
               value={transferForm.from_location}
-              onChange={(e) => setTransferForm({ ...transferForm, from_location: e.target.value })}
+              onChange={(e) => {
+                const newFrom = e.target.value;
+                setTransferForm({
+                  ...transferForm,
+                  from_location: newFrom,
+                  to_location: newFrom === 'STORE' ? 'DISPENSARY' : 'STORE',
+                });
+              }}
               options={[
                 { value: 'STORE', label: 'Store (Warehouse)' },
                 { value: 'DISPENSARY', label: 'Dispensary' },
@@ -495,11 +548,63 @@ export const InventoryPage = () => {
               ]}
             />
           </div>
+
+          {/* Smart Batch Auto-Selection & Guidance */}
+          {transferForm.product_id && (
+            <div>
+              {loadingBatches ? (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500 flex items-center space-x-2">
+                  <div className="w-3.5 h-3.5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Checking stock and batch availability...</span>
+                </div>
+              ) : availableBatches.length === 1 ? (
+                /* 1. Single Batch: Automatically Selected */
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 space-y-1">
+                  <div className="font-bold flex items-center text-emerald-900">
+                    <CheckCircle className="w-4 h-4 mr-1.5 text-emerald-600 flex-shrink-0" />
+                    <span>Single Batch Auto-Selected</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-700">
+                    Batch: <strong className="font-mono">{availableBatches[0].batch_number || 'Default'}</strong> • Stock: <strong>{availableBatches[0].quantity} units</strong> • Exp: {availableBatches[0].expiry_date ? new Date(availableBatches[0].expiry_date).toLocaleDateString('en-GB') : 'N/A'}
+                  </p>
+                </div>
+              ) : availableBatches.length > 1 ? (
+                /* 2. Multiple Batches: Prompt the user to select the correct batch */
+                <div className="space-y-2">
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center space-x-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <span>
+                      <strong>Multiple Batches Found ({availableBatches.length}):</strong> Please select which batch to transfer.
+                    </span>
+                  </div>
+                  <Select
+                    label="Select Batch"
+                    required
+                    value={transferForm.batch_number}
+                    onChange={(e) => setTransferForm({ ...transferForm, batch_number: e.target.value })}
+                    placeholder="Choose batch to transfer..."
+                    options={availableBatches.map((b) => ({
+                      value: b.batch_number || '',
+                      label: `Batch ${b.batch_number || 'Default'} — ${b.quantity} units (Exp: ${b.expiry_date ? new Date(b.expiry_date).toLocaleDateString('en-GB') : 'N/A'})`,
+                    }))}
+                  />
+                </div>
+              ) : (
+                /* 3. No Stock in source location */
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center space-x-1.5">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                  <span>No available stock in {transferForm.from_location} for this product.</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Input
               label="Batch Number"
-              placeholder="e.g. BATCH-001"
+              placeholder="Auto-filled or selected above"
               value={transferForm.batch_number}
+              readOnly={availableBatches.length <= 1}
               onChange={(e) => setTransferForm({ ...transferForm, batch_number: e.target.value })}
             />
             <Input
@@ -517,7 +622,11 @@ export const InventoryPage = () => {
             value={transferForm.notes}
             onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })}
           />
-          <Button type="submit" className="w-full py-2.5 font-semibold mt-2">
+          <Button
+            type="submit"
+            className="w-full py-2.5 font-semibold mt-2"
+            disabled={availableBatches.length === 0 && Boolean(transferForm.product_id)}
+          >
             Complete Transfer
           </Button>
         </form>
