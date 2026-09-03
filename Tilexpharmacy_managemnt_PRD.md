@@ -248,10 +248,11 @@ Provides secure access to the system using JWT-based authentication. Supports ro
 
 ### 6.2 Product Management
 **Feature Description:**
-Manages the catalog of products, distinguishing between MEDICINE and COSMETIC types. Captures essential details like names (in English and Amharic), categories, and pricing, with specialized pharmaceutical fields for medicines.
+Manages the catalog of products, distinguishing between MEDICINE and COSMETIC types. Captures essential details like names (in English and Amharic), categories, and pricing, with specialized pharmaceutical fields for medicines. Includes **Mass Product Upload** via customizable CSV templates.
 
 **User Stories:**
 - As a pharmacist, I want to add a new medicine with its generic name, dosage form, and strength, so that it can be correctly identified and tracked.
+- As an admin or pharmacist, I want to download a customizable CSV template and bulk upload hundreds of products at once, so that inventory onboarding is fast and error-free.
 - As a user, I want to search for products by name, category, or type, so that I can quickly find the required item.
 - As an admin, I want to softly deactivate a product instead of deleting it, so that historical sales data is preserved.
 
@@ -259,6 +260,8 @@ Manages the catalog of products, distinguishing between MEDICINE and COSMETIC ty
 - Supports MEDICINE and COSMETIC product types.
 - Shared fields include name, name_am, brand, manufacturer, unit_price, barcode, and category.
 - Medicine-specific fields include generic_name, dosage_form, strength, and requires_prescription.
+- Mass Product Upload feature with downloadable customizable template (`product_import_template.csv`) with sample rows.
+- Bulk upload provides client-side validation preview (highlighting missing names, invalid prices, or mismatched types) before committing to the database.
 - Search supports filtering by type, category, and name.
 - Product deletion is a soft delete (updating `is_active` to false).
 
@@ -269,6 +272,8 @@ Manages the catalog of products, distinguishing between MEDICINE and COSMETIC ty
 **Key API Endpoints:**
 - `GET /api/v1/products`
 - `POST /api/v1/products`
+- `GET /api/v1/products/import-template`
+- `POST /api/v1/products/bulk-upload`
 - `GET /api/v1/products/:id`
 - `PUT /api/v1/products/:id`
 - `DELETE /api/v1/products/:id`
@@ -278,22 +283,23 @@ Manages the catalog of products, distinguishing between MEDICINE and COSMETIC ty
 
 ### 6.3 Inventory Management
 **Feature Description:**
-Tracks product stock levels across two distinct locations: STORE and DISPENSARY. Handles stock transfers, returns, expiry tracking, and low-stock alerts.
+Tracks product stock levels across two distinct locations: STORE and DISPENSARY. Handles stock transfers with **Smart Batch Auto-Selection**, returns, expiry tracking, and low-stock alerts.
 
 **User Stories:**
-- As a pharmacist, I want to transfer stock from the Store to the Dispensary, so that the front desk has sufficient items for sales.
+- As a pharmacist, I want to transfer stock from the Store to the Dispensary (or vice-versa), and have the system automatically select the batch number if there is only one batch available.
+- As a pharmacist, if a product has multiple batches, I want the system to prompt me with a clear dropdown showing batch numbers, available stock, and expiry dates, so I can pick the correct batch.
 - As an admin, I want to view low-stock and expiry alerts, so that I can reorder products or remove expired items in time.
 - As a pharmacist, I want to adjust stock levels with a specified reason, so that inventory discrepancies can be corrected and audited.
 
 **Acceptance Criteria:**
 - Tracks inventory separately for STORE and DISPENSARY locations.
 - Captures quantity, batch_number, expiry_date, and shelf_location per inventory record.
-- Stock transfers from Store to Dispensary automatically decrement Store quantity, increment Dispensary quantity, and log a transfer record (including transferred_by and notes).
-- Admins can process Dispensary to Store returns.
-- System generates alerts for items below their `reorder_level` and items expiring within 30, 60, or 90 days.
+- **Smart Batch Auto-Selection:**
+  - When transferring stock, querying available batches at source location automatically selects the batch if only 1 exists.
+  - If multiple batches exist, prompts user to select the appropriate batch with real-time stock and expiry indicators.
+- Stock transfers decrement source quantity, increment destination quantity, and log a transfer record atomically.
+- System generates alerts for items below `reorder_level` and items expiring within 30, 60, or 90 days.
 - Stock adjustments require a reason and generate an audit trail.
-- Inventory is filterable by location, product type, category, and expiry status.
-- New stock is received into the Store.
 
 **Relevant Data Model:**
 - Tables: `inventory`, `inventory_transfers`, `audit_log`
@@ -305,36 +311,41 @@ Tracks product stock levels across two distinct locations: STORE and DISPENSARY.
 - `POST /api/v1/inventory`
 - `GET /api/v1/inventory/store`
 - `GET /api/v1/inventory/dispensary`
+- `GET /api/v1/inventory/batches?product_id=...&location=...`
 - `POST /api/v1/inventory/transfer`
 - `GET /api/v1/inventory/transfers`
 - `GET /api/v1/products/low-stock`
 - `GET /api/v1/products/expiring?days=30`
-- `GET /api/v1/inventory/adjustments`
 
 ### 6.4 Prescription Processing
 **Feature Description:**
-Facilitates the creation, tracking, and dispensing of medical prescriptions. Links medicines to patient records and manages the prescription workflow from pending to dispensed.
+Facilitates the creation, tracking, and dispensing of medical prescriptions with **WebQR-Based Automated Camera Capture**. Captures prescriptions without requiring an existing patient profile and allows digital transcription.
 
 **User Stories:**
-- As a pharmacist, I want to create a prescription and add medicines with dosage instructions, so that the correct treatment is recorded for the patient.
-- As a pharmacist, I want to dispense a prescription, so that the system automatically updates the dispensed quantity and decrements Dispensary inventory.
-- As a user, I want to search for prescriptions by their auto-generated number or patient name, so that I can quickly retrieve their status.
+- As a pharmacist, I want to scan a WebQR code using a smartphone camera to take a photo of a doctor's prescription slip, which automatically uploads to my desktop screen in real-time.
+- As a pharmacist, I want to process a prescription without requiring a patient profile, so walk-in patients with external paper slips can be served swiftly.
+- As a pharmacist, I want to dispense a prescription, so that the system automatically decrements Dispensary inventory.
 
 **Acceptance Criteria:**
+- **WebQR Mobile Prescription Upload:**
+  - Desktop displays a dynamic QR code encoding a secure session URL.
+  - Mobile browser opens the upload page, requests native camera access, and uploads the prescription photo.
+  - Desktop polls and detects image upload in real-time, displaying the photo side-by-side with prescribed medication selection.
+  - **No patient profile is required** (`patient_id` is optional).
 - Prescriptions are assigned an auto-generated number format: RX-YYYYMMDD-XXXX.
 - Workflow statuses include PENDING, DISPENSED, COMPLETED, and CANCELLED.
-- Prescriptions are linked to patient records.
 - Dispensing a prescription checks Dispensary inventory, decrements stock, and updates `dispensed_qty`.
-- Only items with `requires_prescription=true` mandate a prescription for sale. Cosmetics and OTC medicines can be sold directly.
-- Enables viewing prescription history per patient.
-- Searching by number, patient, status, and date is supported.
+- Scanned prescription photos can be viewed in high resolution from the prescription list.
 
 **Relevant Data Model:**
 - Tables: `prescriptions`, `prescription_items`
-- `prescriptions` fields: `id`, `prescription_no`, `patient_id`, `prescribed_by`, `dispensed_by`, `status`, `notes`, `created_at`, `updated_at`
+- `prescriptions` fields: `id`, `prescription_no`, `patient_id` (optional), `image_url` (optional), `upload_session_id` (optional), `prescribed_by`, `dispensed_by`, `status`, `notes`, `created_at`, `updated_at`
 - `prescription_items` fields: `id`, `prescription_id`, `product_id`, `quantity`, `dosage`, `duration`, `instructions`, `dispensed_qty`, `created_at`
 
 **Key API Endpoints:**
+- `POST /api/v1/prescriptions/upload-session` (Generate QR session)
+- `POST /api/v1/prescriptions/upload-session/:sessionId` (Mobile camera upload)
+- `GET /api/v1/prescriptions/upload-session/:sessionId` (Desktop poller)
 - `GET /api/v1/prescriptions`
 - `POST /api/v1/prescriptions`
 - `GET /api/v1/prescriptions/:id`

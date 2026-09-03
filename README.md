@@ -7,6 +7,9 @@ TilexPharmacy is a full-stack, bilingual (English & Amharic) management platform
 ## 🌟 Key Features
 
 - **Dual-Location Inventory**: Tracks stock independently across **Store** (bulk warehouse) and **Dispensary** (retail counter) with atomic transfers and audit logs.
+- **Smart Transfer Batch Selection**: Automatically selects and locks batch numbers when transferring single-batch products between Store and Dispensary. Prompts pharmacists with stock and expiry details when multiple batches exist.
+- **WebQR Prescription Camera Capture**: Pharmacists generate a dynamic QR code on the desktop; scanning with any mobile camera immediately opens the upload page and securely streams the prescription photo back to the pharmacist's screen. No patient profile required.
+- **Mass Product Upload**: Bulk CSV import with a downloadable, customizable template (`product_import_template.csv`), sample guidance for MEDICINE and COSMETIC types, and pre-import validation preview.
 - **Two-Step Pharmacist-to-Cashier Workflow**:
   - **Pharmacist**: Selects medicines/products for the customer, configures dosage/quantities, links patient prescriptions, and approves the sale order (`PENDING_PAYMENT`). Responsible for adding and updating product details.
   - **Cashier**: Accesses the live **Pending Orders Queue**, reviews the locked (read-only) product list without editing capability, collects payment (Cash, Telebirr, CBE, Bank Transfer, or split payments), logs transaction references, confirms payment (`COMPLETED`), and prints receipts.
