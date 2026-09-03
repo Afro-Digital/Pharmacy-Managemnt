@@ -475,13 +475,13 @@ export const PrescriptionsPage = () => {
 
               {uploadedImageUrl && (
                 <div className="max-h-56 overflow-hidden rounded-xl border border-slate-200 shadow-xs">
-                  <img src={uploadedImageUrl} alt="Uploaded prescription" className="w-full h-full object-contain" />
+                  <img src={resolveAssetUrl(uploadedImageUrl)} alt="Uploaded prescription" className="w-full h-full object-contain" />
                 </div>
               )}
 
               <Button
                 onClick={handleUseCapturedPhoto}
-                className="w-full py-2.5 font-bold bg-blue-600 hover:bg-blue-700"
+                className="w-full py-2.5 font-bold bg-[#5345E6] hover:bg-[#4336D6] text-white rounded-xl"
               >
                 Proceed to Select Medications & Fulfill
               </Button>
@@ -508,12 +508,12 @@ export const PrescriptionsPage = () => {
                   <span className="font-semibold flex items-center">
                     <Camera className="w-3.5 h-3.5 mr-1" /> Scanned Doctor Slip
                   </span>
-                  <a href={uploadedImageUrl} target="_blank" rel="noreferrer" className="hover:text-white flex items-center">
+                  <a href={resolveAssetUrl(uploadedImageUrl)} target="_blank" rel="noreferrer" className="hover:text-white flex items-center">
                     <ExternalLink className="w-3 h-3 mr-0.5" /> Full Size
                   </a>
                 </div>
                 <div className="flex-1 overflow-auto flex items-center justify-center p-1">
-                  <img src={uploadedImageUrl} alt="Prescription" className="max-h-[420px] object-contain rounded-lg" />
+                  <img src={resolveAssetUrl(uploadedImageUrl)} alt="Prescription" className="max-h-[420px] object-contain rounded-lg" />
                 </div>
               </div>
             )}
