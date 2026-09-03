@@ -1,0 +1,333 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  PHARMACIST
+  CASHIER
+}
+
+enum CategoryType {
+  MEDICINE
+  COSMETIC
+  GENERAL
+}
+
+enum ProductType {
+  MEDICINE
+  COSMETIC
+}
+
+enum Location {
+  STORE
+  DISPENSARY
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum PrescriptionStatus {
+  PENDING
+  DISPENSED
+  COMPLETED
+  CANCELLED
+}
+
+enum SaleType {
+  PRESCRIPTION
+  OTC
+  WALK_IN
+}
+
+enum SaleStatus {
+  PENDING_PAYMENT
+  COMPLETED
+  REFUNDED
+  PARTIAL_REFUND
+  CANCELLED
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  full_name     String   @db.VarChar(255)
+  username      String   @unique @db.VarChar(100)
+  email         String?  @unique @db.VarChar(255)
+  password_hash String   @db.VarChar(255)
+  role          Role
+  phone         String?  @db.VarChar(20)
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now()) @db.Timestamptz
+  updated_at    DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  inventory_transfers    InventoryTransfer[]
+  dispensed_prescriptions Prescription[]       @relation("DispensedBy")
+  approved_sales         Sale[]               @relation("PharmacistSales")
+  processed_sales        Sale[]               @relation("CashierSales")
+  audit_logs             AuditLog[]
+
+  @@index([role])
+  @@index([is_active])
+  @@map("users")
+}
+
+model Category {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String       @db.VarChar(255)
+  name_am     String?      @db.VarChar(255)
+  type        CategoryType
+  description String?      @db.Text
+  created_at  DateTime     @default(now()) @db.Timestamptz
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id                    String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String      @db.VarChar(255)
+  name_am               String?     @db.VarChar(255)
+  generic_name          String?     @db.VarChar(255)
+  category_id           String?     @db.Uuid
+  product_type          ProductType
+  dosage_form           String?     @db.VarChar(100)
+  strength              String?     @db.VarChar(100)
+  brand                 String?     @db.VarChar(255)
+  manufacturer          String?     @db.VarChar(255)
+  unit_price            Decimal     @db.Decimal(10, 2)
+  reorder_level         Int         @default(10)
+  requires_prescription Boolean     @default(false)
+  barcode               String?     @db.VarChar(100)
+  description           String?     @db.Text
+  is_active             Boolean     @default(true)
+  created_at            DateTime    @default(now()) @db.Timestamptz
+  updated_at            DateTime    @default(now()) @updatedAt @db.Timestamptz
+
+  category           Category?          @relation(fields: [category_id], references: [id])
+  inventory          Inventory[]
+  inventory_transfers InventoryTransfer[]
+  prescription_items PrescriptionItem[]
+  sale_items         SaleItem[]
+
+  @@index([barcode])
+  @@index([product_type])
+  @@index([category_id])
+  @@index([is_active])
+  @@map("products")
+}
+
+model Inventory {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  product_id     String    @db.Uuid
+  location       Location
+  batch_number   String?   @db.VarChar(100)
+  expiry_date    DateTime? @db.Date
+  quantity       Int       @default(0)
+  shelf_location String?   @db.VarChar(100)
+  received_date  DateTime? @default(dbgenerated("CURRENT_DATE")) @db.Date
+  supplier_name  String?   @db.VarChar(255)
+  notes          String?   @db.Text
+  created_at     DateTime  @default(now()) @db.Timestamptz
+  updated_at     DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  product Product @relation(fields: [product_id], references: [id])
+
+  @@unique([product_id, location, batch_number])
+  @@index([expiry_date])
+  @@index([location])
+  @@map("inventory")
+}
+
+model InventoryTransfer {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  product_id     String   @db.Uuid
+  batch_number   String?  @db.VarChar(100)
+  from_location  Location
+  to_location    Location
+  quantity       Int
+  transferred_by String   @db.Uuid
+  notes          String?  @db.Text
+  created_at     DateTime @default(now()) @db.Timestamptz
+
+  product Product @relation(fields: [product_id], references: [id])
+  user    User    @relation(fields: [transferred_by], references: [id])
+
+  @@map("inventory_transfers")
+}
+
+model Patient {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  full_name     String    @db.VarChar(255)
+  full_name_am  String?   @db.VarChar(255)
+  phone         String?   @db.VarChar(20)
+  date_of_birth DateTime? @db.Date
+  gender        Gender?
+  address       String?   @db.Text
+  allergies     String?   @db.Text
+  notes         String?   @db.Text
+  created_at    DateTime  @default(now()) @db.Timestamptz
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  prescriptions Prescription[]
+  sales         Sale[]
+
+  @@index([phone])
+  @@map("patients")
+}
+
+model Prescription {
+  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prescription_no String             @unique @db.VarChar(50)
+  patient_id      String             @db.Uuid
+  prescribed_by   String?            @db.VarChar(255)
+  dispensed_by    String?            @db.Uuid
+  status          PrescriptionStatus @default(PENDING)
+  notes           String?            @db.Text
+  created_at      DateTime           @default(now()) @db.Timestamptz
+  updated_at      DateTime           @default(now()) @updatedAt @db.Timestamptz
+
+  patient   Patient            @relation(fields: [patient_id], references: [id])
+  dispenser User?              @relation("DispensedBy", fields: [dispensed_by], references: [id])
+  items     PrescriptionItem[]
+  sales     Sale[]
+
+  @@index([status])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prescription_id String   @db.Uuid
+  product_id      String   @db.Uuid
+  quantity        Int
+  dosage          String?  @db.VarChar(255)
+  duration        String?  @db.VarChar(100)
+  instructions    String?  @db.Text
+  dispensed_qty   Int?     @default(0)
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  prescription Prescription @relation(fields: [prescription_id], references: [id])
+  product      Product      @relation(fields: [product_id], references: [id])
+
+  @@map("prescription_items")
+}
+
+model Sale {
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sale_number     String     @unique @db.VarChar(50)
+  prescription_id String?    @db.Uuid
+  patient_id      String?    @db.Uuid
+  pharmacist_id   String?    @db.Uuid
+  cashier_id      String?    @db.Uuid
+  subtotal        Decimal    @db.Decimal(10, 2)
+  discount_amount Decimal?   @default(0) @db.Decimal(10, 2)
+  total_amount    Decimal    @db.Decimal(10, 2)
+  sale_type       SaleType   @default(WALK_IN)
+  status          SaleStatus @default(PENDING_PAYMENT)
+  notes           String?    @db.Text
+  created_at      DateTime   @default(now()) @db.Timestamptz
+
+  prescription Prescription? @relation(fields: [prescription_id], references: [id])
+  patient      Patient?      @relation(fields: [patient_id], references: [id])
+  pharmacist   User?         @relation("PharmacistSales", fields: [pharmacist_id], references: [id])
+  cashier      User?         @relation("CashierSales", fields: [cashier_id], references: [id])
+  items        SaleItem[]
+  payments     Payment[]
+
+  @@index([created_at])
+  @@index([status])
+  @@map("sales")
+}
+
+model SaleItem {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sale_id      String   @db.Uuid
+  product_id   String   @db.Uuid
+  batch_number String?  @db.VarChar(100)
+  quantity     Int
+  unit_price   Decimal  @db.Decimal(10, 2)
+  discount     Decimal? @default(0) @db.Decimal(10, 2)
+  total_price  Decimal  @db.Decimal(10, 2)
+  created_at   DateTime @default(now()) @db.Timestamptz
+
+  sale    Sale    @relation(fields: [sale_id], references: [id])
+  product Product @relation(fields: [product_id], references: [id])
+
+  @@map("sale_items")
+}
+
+model PaymentMethod {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String   @db.VarChar(100)
+  name_am    String?  @db.VarChar(100)
+  code       String   @unique @db.VarChar(50)
+  is_active  Boolean  @default(true)
+  sort_order Int?     @default(0)
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  payments Payment[]
+
+  @@map("payment_methods")
+}
+
+model Payment {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sale_id           String   @db.Uuid
+  payment_method_id String   @db.Uuid
+  amount            Decimal  @db.Decimal(10, 2)
+  reference_number  String?  @db.VarChar(100)
+  created_at        DateTime @default(now()) @db.Timestamptz
+
+  sale           Sale          @relation(fields: [sale_id], references: [id])
+  payment_method PaymentMethod @relation(fields: [payment_method_id], references: [id])
+
+  @@map("payments")
+}
+
+model AuditLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String?  @db.Uuid
+  action      String   @db.VarChar(50)
+  entity_type String   @db.VarChar(50)
+  entity_id   String?  @db.Uuid
+  details     Json?    @db.JsonB
+  ip_address  String?  @db.VarChar(45)
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  user User? @relation(fields: [user_id], references: [id])
+
+  @@index([entity_type, entity_id])
+  @@map("audit_log")
+}
+
+model StoreSettings {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pharmacy_name    String   @default("TilexPharmacy") @db.VarChar(255)
+  pharmacy_name_am String?  @default("ቲሌክስ ፋርማሲ") @db.VarChar(255)
+  address          String?  @db.Text
+  phone            String?  @db.VarChar(20)
+  email            String?  @db.VarChar(255)
+  logo_url         String?  @db.VarChar(500)
+  primary_color    String?  @default("#2563EB") @db.VarChar(7)
+  secondary_color  String?  @default("#1E40AF") @db.VarChar(7)
+  currency         String?  @default("ETB") @db.VarChar(10)
+  default_language String?  @default("en") @db.VarChar(5)
+  operating_hours  Json?    @db.JsonB
+  license_number   String?  @db.VarChar(100)
+  updated_at       DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  @@map("store_settings")
+}
