@@ -1,0 +1,561 @@
+import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import api from '../../services/api';
+import { Table } from '../../components/ui/Table';
+import { Button } from '../../components/ui/Button';
+import { Input } from '../../components/ui/Input';
+import { Select } from '../../components/ui/Select';
+import { Modal } from '../../components/ui/Modal';
+import { Badge } from '../../components/ui/Badge';
+import { Alert } from '../../components/ui/Alert';
+import {
+  Boxes,
+  ArrowRightLeft,
+  Plus,
+  Edit,
+  AlertTriangle,
+  Calendar,
+  Filter,
+  Warehouse,
+  Store,
+} from 'lucide-react';
+
+export const InventoryPage = () => {
+  const { t } = useTranslation();
+
+  const [activeTab, setActiveTab] = useState('STORE'); // 'STORE', 'DISPENSARY', 'TRANSFERS'
+  const [inventoryList, setInventoryList] = useState([]);
+  const [transfersList, setTransfersList] = useState([]);
+  const [productsList, setProductsList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const [successMessage, setSuccessMessage] = useState(null);
+
+  // Filters
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expiryFilter, setExpiryFilter] = useState('');
+
+  // Modals
+  const [receiveModalOpen, setReceiveModalOpen] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
+  const [selectedItemForAdjust, setSelectedItemForAdjust] = useState(null);
+
+  // Receive Form
+  const [receiveForm, setReceiveForm] = useState({
+    product_id: '',
+    batch_number: '',
+    expiry_date: '',
+    quantity: '',
+    shelf_location: '',
+    supplier_name: '',
+    notes: '',
+  });
+
+  // Transfer Form
+  const [transferForm, setTransferForm] = useState({
+    product_id: '',
+    batch_number: '',
+    from_location: 'STORE',
+    to_location: 'DISPENSARY',
+    quantity: '',
+    notes: '',
+  });
+
+  // Adjust Form
+  const [adjustQty, setAdjustQty] = useState('');
+  const [adjustReason, setAdjustReason] = useState('');
+
+  const fetchInventory = async () => {
+    try {
+      setLoading(true);
+      if (activeTab === 'TRANSFERS') {
+        const res = await api.get('/inventory/transfers?limit=50');
+        if (res.data.success) setTransfersList(res.data.data);
+      } else {
+        const queryParams = new URLSearchParams({
+          location: activeTab,
+          limit: '100',
+        });
+        if (searchQuery) queryParams.append('search', searchQuery);
+        if (expiryFilter) queryParams.append('expiry_status', expiryFilter);
+
+        const res = await api.get(`/inventory?${queryParams.toString()}`);
+        if (res.data.success) setInventoryList(res.data.data);
+      }
+    } catch (err) {
+      console.error('Inventory load error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchInventory();
+  }, [activeTab, searchQuery, expiryFilter]);
+
+  // Load products list for dropdowns
+  useEffect(() => {
+    const loadProducts = async () => {
+      try {
+        const res = await api.get('/products?limit=100');
+        if (res.data.success) setProductsList(res.data.data);
+      } catch (err) {
+        console.error('Products load error:', err);
+      }
+    };
+    loadProducts();
+  }, []);
+
+  const handleReceiveStock = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api.post('/inventory', receiveForm);
+      if (res.data.success) {
+        setSuccessMessage('Stock received into Store successfully');
+        setReceiveModalOpen(false);
+        setReceiveForm({
+          product_id: '',
+          batch_number: '',
+          expiry_date: '',
+          quantity: '',
+          shelf_location: '',
+          supplier_name: '',
+          notes: '',
+        });
+        fetchInventory();
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Failed to receive stock');
+    }
+  };
+
+  const handleTransferStock = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api.post('/inventory/transfer', transferForm);
+      if (res.data.success) {
+        setSuccessMessage('Stock transferred to Dispensary successfully');
+        setTransferModalOpen(false);
+        setTransferForm({
+          product_id: '',
+          batch_number: '',
+          from_location: 'STORE',
+          to_location: 'DISPENSARY',
+          quantity: '',
+          notes: '',
+        });
+        fetchInventory();
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Transfer failed');
+    }
+  };
+
+  const handleAdjustStock = async (e) => {
+    e.preventDefault();
+    if (!selectedItemForAdjust) return;
+    try {
+      const res = await api.put(`/inventory/${selectedItemForAdjust.id}`, {
+        quantity: adjustQty,
+        reason: adjustReason,
+      });
+      if (res.data.success) {
+        setSuccessMessage('Inventory discrepancy adjusted');
+        setAdjustModalOpen(false);
+        setSelectedItemForAdjust(null);
+        setAdjustQty('');
+        setAdjustReason('');
+        fetchInventory();
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Adjustment failed');
+    }
+  };
+
+  const getExpiryBadge = (expiryDate) => {
+    if (!expiryDate) return <Badge variant="neutral">N/A</Badge>;
+    const exp = new Date(expiryDate);
+    const today = new Date();
+    const thirtyDays = new Date();
+    thirtyDays.setDate(today.getDate() + 30);
+
+    if (exp < today) return <Badge variant="danger">{t('inventory.expired')}</Badge>;
+    if (exp <= thirtyDays) return <Badge variant="warning">{t('inventory.expiring_soon')}</Badge>;
+    return <Badge variant="success">{t('inventory.normal')}</Badge>;
+  };
+
+  const inventoryColumns = [
+    {
+      header: t('inventory.product'),
+      accessor: 'product',
+      render: (row) => (
+        <div>
+          <div className="font-semibold text-slate-900">{row.product?.name}</div>
+          <div className="text-xs text-slate-400">{row.product?.generic_name || row.product?.brand}</div>
+        </div>
+      ),
+    },
+    {
+      header: t('inventory.batch'),
+      accessor: 'batch_number',
+      render: (row) => <span className="font-mono text-xs text-slate-600">{row.batch_number || 'N/A'}</span>,
+    },
+    {
+      header: t('inventory.qty'),
+      accessor: 'quantity',
+      render: (row) => (
+        <span className="font-bold text-slate-900 text-sm">{row.quantity}</span>
+      ),
+    },
+    {
+      header: t('inventory.shelf'),
+      accessor: 'shelf_location',
+      render: (row) => row.shelf_location || '—',
+    },
+    {
+      header: t('inventory.expiry'),
+      accessor: 'expiry_date',
+      render: (row) => (
+        <div className="flex items-center space-x-2">
+          <span className="text-xs text-slate-600">
+            {row.expiry_date ? new Date(row.expiry_date).toLocaleDateString('en-GB') : 'No expiry'}
+          </span>
+          {getExpiryBadge(row.expiry_date)}
+        </div>
+      ),
+    },
+    {
+      header: t('inventory.actions'),
+      accessor: 'actions',
+      render: (row) => (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setSelectedItemForAdjust(row);
+            setAdjustQty(row.quantity);
+            setAdjustModalOpen(true);
+          }}
+        >
+          <Edit className="w-3.5 h-3.5 mr-1" />
+          {t('inventory.adjust')}
+        </Button>
+      ),
+    },
+  ];
+
+  const transferColumns = [
+    {
+      header: 'Date',
+      accessor: 'created_at',
+      render: (row) => new Date(row.created_at).toLocaleString('en-GB'),
+    },
+    {
+      header: 'Product',
+      accessor: 'product',
+      render: (row) => row.product?.name,
+    },
+    {
+      header: 'Batch',
+      accessor: 'batch_number',
+      render: (row) => row.batch_number || '—',
+    },
+    {
+      header: 'Movement',
+      accessor: 'movement',
+      render: (row) => (
+        <div className="flex items-center space-x-1.5 font-semibold text-xs text-blue-700">
+          <span>{row.from_location}</span>
+          <ArrowRightLeft className="w-3.5 h-3.5" />
+          <span>{row.to_location}</span>
+        </div>
+      ),
+    },
+    {
+      header: 'Qty Transferred',
+      accessor: 'quantity',
+      render: (row) => <span className="font-bold text-slate-900">{row.quantity}</span>,
+    },
+    {
+      header: 'Transferred By',
+      accessor: 'user',
+      render: (row) => row.user?.full_name,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Title & Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+            {t('inventory.title')}
+          </h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Manage bulk Store inventory, retail Dispensary counter, and stock movements
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <Button
+            onClick={() => setReceiveModalOpen(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-sm shadow-sm"
+          >
+            <Plus className="w-4 h-4 mr-1.5" />
+            {t('inventory.add_stock')}
+          </Button>
+          <Button
+            onClick={() => setTransferModalOpen(true)}
+            variant="outline"
+            className="text-sm"
+          >
+            <ArrowRightLeft className="w-4 h-4 mr-1.5 text-slate-500" />
+            {t('inventory.transfer_stock')}
+          </Button>
+        </div>
+      </div>
+
+      {successMessage && (
+        <Alert variant="success" onClose={() => setSuccessMessage(null)}>
+          {successMessage}
+        </Alert>
+      )}
+
+      {errorMessage && (
+        <Alert variant="error" onClose={() => setErrorMessage(null)}>
+          {errorMessage}
+        </Alert>
+      )}
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200">
+        <button
+          onClick={() => setActiveTab('STORE')}
+          className={`flex items-center px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
+            activeTab === 'STORE'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Warehouse className="w-4 h-4 mr-2" />
+          {t('inventory.store_tab')}
+        </button>
+        <button
+          onClick={() => setActiveTab('DISPENSARY')}
+          className={`flex items-center px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
+            activeTab === 'DISPENSARY'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Store className="w-4 h-4 mr-2" />
+          {t('inventory.dispensary_tab')}
+        </button>
+        <button
+          onClick={() => setActiveTab('TRANSFERS')}
+          className={`flex items-center px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
+            activeTab === 'TRANSFERS'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <ArrowRightLeft className="w-4 h-4 mr-2" />
+          {t('inventory.transfers_tab')}
+        </button>
+      </div>
+
+      {/* Filter Row (only for Store/Dispensary) */}
+      {activeTab !== 'TRANSFERS' && (
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1">
+            <Input
+              placeholder="Search by product name or barcode..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+          <div className="w-full sm:w-56">
+            <Select
+              value={expiryFilter}
+              onChange={(e) => setExpiryFilter(e.target.value)}
+              placeholder="All Expiry Statuses"
+              options={[
+                { value: 'expired', label: 'Expired Items' },
+                { value: 'expiring_soon', label: 'Expiring Within 30 Days' },
+              ]}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Main Table */}
+      {activeTab === 'TRANSFERS' ? (
+        <Table columns={transferColumns} data={transfersList} isLoading={loading} />
+      ) : (
+        <Table columns={inventoryColumns} data={inventoryList} isLoading={loading} />
+      )}
+
+      {/* Receive Stock Modal (Adds to Store) */}
+      <Modal
+        isOpen={receiveModalOpen}
+        onClose={() => setReceiveModalOpen(false)}
+        title={t('inventory.add_stock')}
+        maxWidth="max-w-lg"
+      >
+        <form onSubmit={handleReceiveStock} className="space-y-4">
+          <Select
+            label="Product"
+            required
+            value={receiveForm.product_id}
+            onChange={(e) => setReceiveForm({ ...receiveForm, product_id: e.target.value })}
+            placeholder="Select a product"
+            options={productsList.map((p) => ({ value: p.id, label: `${p.name} (${p.product_type})` }))}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Batch Number"
+              placeholder="e.g. BATCH-001"
+              value={receiveForm.batch_number}
+              onChange={(e) => setReceiveForm({ ...receiveForm, batch_number: e.target.value })}
+            />
+            <Input
+              label="Quantity"
+              type="number"
+              required
+              min="1"
+              value={receiveForm.quantity}
+              onChange={(e) => setReceiveForm({ ...receiveForm, quantity: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Expiry Date"
+              type="date"
+              value={receiveForm.expiry_date}
+              onChange={(e) => setReceiveForm({ ...receiveForm, expiry_date: e.target.value })}
+            />
+            <Input
+              label="Shelf Location"
+              placeholder="e.g. A1, Shelf 3"
+              value={receiveForm.shelf_location}
+              onChange={(e) => setReceiveForm({ ...receiveForm, shelf_location: e.target.value })}
+            />
+          </div>
+          <Input
+            label="Supplier Name"
+            placeholder="e.g. Ethiopian Pharmaceuticals"
+            value={receiveForm.supplier_name}
+            onChange={(e) => setReceiveForm({ ...receiveForm, supplier_name: e.target.value })}
+          />
+          <Input
+            label="Notes"
+            placeholder="Optional comments..."
+            value={receiveForm.notes}
+            onChange={(e) => setReceiveForm({ ...receiveForm, notes: e.target.value })}
+          />
+          <Button type="submit" className="w-full py-2.5 font-semibold mt-2">
+            Confirm & Add to Store
+          </Button>
+        </form>
+      </Modal>
+
+      {/* Transfer Stock Modal (Store -> Dispensary) */}
+      <Modal
+        isOpen={transferModalOpen}
+        onClose={() => setTransferModalOpen(false)}
+        title={t('inventory.transfer_stock')}
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleTransferStock} className="space-y-4">
+          <Select
+            label="Product"
+            required
+            value={transferForm.product_id}
+            onChange={(e) => setTransferForm({ ...transferForm, product_id: e.target.value })}
+            placeholder="Select product to transfer"
+            options={productsList.map((p) => ({ value: p.id, label: p.name }))}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <Select
+              label="From Location"
+              value={transferForm.from_location}
+              onChange={(e) => setTransferForm({ ...transferForm, from_location: e.target.value })}
+              options={[
+                { value: 'STORE', label: 'Store (Warehouse)' },
+                { value: 'DISPENSARY', label: 'Dispensary' },
+              ]}
+            />
+            <Select
+              label="To Location"
+              value={transferForm.to_location}
+              onChange={(e) => setTransferForm({ ...transferForm, to_location: e.target.value })}
+              options={[
+                { value: 'DISPENSARY', label: 'Dispensary (Counter)' },
+                { value: 'STORE', label: 'Store' },
+              ]}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Batch Number"
+              placeholder="e.g. BATCH-001"
+              value={transferForm.batch_number}
+              onChange={(e) => setTransferForm({ ...transferForm, batch_number: e.target.value })}
+            />
+            <Input
+              label="Quantity to Move"
+              type="number"
+              required
+              min="1"
+              value={transferForm.quantity}
+              onChange={(e) => setTransferForm({ ...transferForm, quantity: e.target.value })}
+            />
+          </div>
+          <Input
+            label="Transfer Notes"
+            placeholder="e.g. Weekly counter restock"
+            value={transferForm.notes}
+            onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })}
+          />
+          <Button type="submit" className="w-full py-2.5 font-semibold mt-2">
+            Complete Transfer
+          </Button>
+        </form>
+      </Modal>
+
+      {/* Adjust Discrepancy Modal */}
+      <Modal
+        isOpen={adjustModalOpen}
+        onClose={() => setAdjustModalOpen(false)}
+        title={`Adjust Stock: ${selectedItemForAdjust?.product?.name}`}
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleAdjustStock} className="space-y-4">
+          <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">
+            <p><strong>Location:</strong> {selectedItemForAdjust?.location}</p>
+            <p><strong>Current Quantity:</strong> {selectedItemForAdjust?.quantity}</p>
+            <p><strong>Batch:</strong> {selectedItemForAdjust?.batch_number || 'GEN'}</p>
+          </div>
+          <Input
+            label="New Correct Quantity"
+            type="number"
+            min="0"
+            required
+            value={adjustQty}
+            onChange={(e) => setAdjustQty(e.target.value)}
+          />
+          <Input
+            label="Audit Reason"
+            required
+            placeholder="e.g. Broken bottle, inventory count mismatch"
+            value={adjustReason}
+            onChange={(e) => setAdjustReason(e.target.value)}
+          />
+          <Button type="submit" className="w-full py-2.5 font-semibold">
+            Save Adjustment
+          </Button>
+        </form>
+      </Modal>
+    </div>
+  );
+};
