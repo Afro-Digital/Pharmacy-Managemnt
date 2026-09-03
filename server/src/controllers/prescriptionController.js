@@ -84,25 +84,98 @@ const getPrescription = async (req, res, next) => {
   }
 };
 
+// In-memory upload session store
+const uploadSessions = new Map();
+
+// POST /api/v1/prescriptions/upload-session
+const createUploadSession = async (req, res, next) => {
+  try {
+    const sessionId = `rx-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    uploadSessions.set(sessionId, {
+      status: 'PENDING',
+      imageUrl: null,
+      createdAt: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      data: {
+        sessionId,
+        uploadUrl: `/rx-upload/${sessionId}`,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/prescriptions/upload-session/:sessionId (Mobile camera upload)
+const uploadSessionImage = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'NO_FILE', message: 'Prescription image file is required' },
+      });
+    }
+
+    const imageUrl = `/uploads/prescriptions/${req.file.filename}`;
+    uploadSessions.set(sessionId, {
+      status: 'UPLOADED',
+      imageUrl,
+      createdAt: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      data: {
+        sessionId,
+        imageUrl,
+      },
+      message: 'Prescription image uploaded successfully',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/v1/prescriptions/upload-session/:sessionId (Desktop status check)
+const getUploadSessionStatus = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = uploadSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Upload session not found or expired' },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: session,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // POST /api/v1/prescriptions
 const createPrescription = async (req, res, next) => {
   try {
-    const { patient_id, prescribed_by, items, notes } = req.body;
-
-    if (!patient_id || !items || items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'VALIDATION', message: 'Patient and at least one item are required' },
-      });
-    }
+    const { patient_id, prescribed_by, items, notes, image_url, upload_session_id } = req.body;
 
     const prescription = await prisma.prescription.create({
       data: {
         prescription_no: generatePrescriptionNo(),
-        patient_id,
-        prescribed_by,
+        patient_id: patient_id || null,
+        prescribed_by: prescribed_by || 'Dr. Medical Order',
+        image_url: image_url || null,
+        upload_session_id: upload_session_id || null,
         notes,
-        items: {
+        items: items && items.length > 0 ? {
           create: items.map((item) => ({
             product_id: item.product_id,
             quantity: item.quantity,
@@ -110,7 +183,7 @@ const createPrescription = async (req, res, next) => {
             duration: item.duration,
             instructions: item.instructions,
           })),
-        },
+        } : undefined,
       },
       include: {
         patient: true,
@@ -121,7 +194,7 @@ const createPrescription = async (req, res, next) => {
     await prisma.auditLog.create({
       data: {
         user_id: req.user.id, action: 'CREATE', entity_type: 'PRESCRIPTION',
-        entity_id: prescription.id, details: { prescription_no: prescription.prescription_no, patient_id },
+        entity_id: prescription.id, details: { prescription_no: prescription.prescription_no, has_image: Boolean(image_url) },
       },
     });
 
@@ -302,4 +375,5 @@ const dispensePrescription = async (req, res, next) => {
 module.exports = {
   getPrescriptions, getPrescription, createPrescription,
   updatePrescription, updateStatus, dispensePrescription,
+  createUploadSession, uploadSessionImage, getUploadSessionStatus,
 };

@@ -12,6 +12,7 @@ import { PatientsPage } from './pages/patients/PatientsPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { UsersPage } from './pages/users/UsersPage';
+import { MobileRxUploadPage } from './pages/prescriptions/MobileRxUploadPage';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -46,6 +47,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/rx-upload/:sessionId" element={<MobileRxUploadPage />} />
 
       <Route
         path="/"
