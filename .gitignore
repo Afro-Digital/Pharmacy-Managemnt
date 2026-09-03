@@ -4,5 +4,10 @@ dist
 build
 uploads/*
 !uploads/.gitkeep
+server/uploads/*
+!server/uploads/.gitkeep
+server/uploads/prescriptions/*
+!server/uploads/prescriptions/.gitkeep
 .DS_Store
 *.log
+.vercel
