@@ -28,6 +28,7 @@ import {
   ArrowRight,
   XCircle,
   RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 
 export const POSPage = () => {

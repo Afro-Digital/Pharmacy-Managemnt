@@ -1,7 +1,7 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import enTranslation from '../../public/locales/en/translation.json';
-import amTranslation from '../../public/locales/am/translation.json';
+import enTranslation from '../locales/en/translation.json';
+import amTranslation from '../locales/am/translation.json';
 
 const savedLang = localStorage.getItem('tilex_lang') || 'en';
 
