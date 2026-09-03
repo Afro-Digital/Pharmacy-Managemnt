@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
@@ -9,10 +9,25 @@ import { Select } from '../../components/ui/Select';
 import { Modal } from '../../components/ui/Modal';
 import { Badge } from '../../components/ui/Badge';
 import { Alert } from '../../components/ui/Alert';
-import { Package, Plus, Edit2, Trash2, Search, FileText } from 'lucide-react';
+import {
+  Package,
+  Plus,
+  Edit2,
+  Trash2,
+  Search,
+  FileText,
+  Upload,
+  Download,
+  FileSpreadsheet,
+  CheckCircle2,
+  AlertCircle,
+  Check,
+} from 'lucide-react';
 
 export const ProductsPage = () => {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const canEditProducts = user && ['ADMIN', 'PHARMACIST'].includes(user.role);
 
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -28,6 +43,14 @@ export const ProductsPage = () => {
   // Modal & Form
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
+
+  // Bulk Upload State
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [parsedRows, setParsedRows] = useState([]);
+  const [bulkErrors, setBulkErrors] = useState([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
+  const fileInputRef = useRef(null);
 
   const initialFormState = {
     name: '',
@@ -113,43 +136,161 @@ export const ProductsPage = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      const payload = {
+        ...formData,
+        unit_price: parseFloat(formData.unit_price) || 0,
+        reorder_level: parseInt(formData.reorder_level) || 10,
+      };
+
       if (editingProduct) {
-        await api.put(`/products/${editingProduct.id}`, formData);
-        setSuccessMessage('Product updated successfully');
+        await api.put(`/products/${editingProduct.id}`, payload);
+        setSuccessMessage(t('products.update_success'));
       } else {
-        await api.post('/products', formData);
-        setSuccessMessage('Product created successfully');
+        await api.post('/products', payload);
+        setSuccessMessage(t('products.create_success'));
       }
+
       setProductModalOpen(false);
       fetchProducts();
     } catch (err) {
-      setErrorMessage(err.response?.data?.error?.message || 'Failed to save product');
+      setErrorMessage(err.response?.data?.error?.message || 'Error saving product');
     }
   };
 
-  const handleDeactivate = async (id) => {
-    if (!window.confirm('Are you sure you want to deactivate this product?')) return;
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`Are you sure you want to deactivate product "${name}"?`)) return;
+
     try {
       await api.delete(`/products/${id}`);
       setSuccessMessage('Product deactivated successfully');
       fetchProducts();
     } catch (err) {
-      setErrorMessage(err.response?.data?.error?.message || 'Deactivation failed');
+      setErrorMessage(err.response?.data?.error?.message || 'Error deactivating product');
     }
   };
 
-  const { user } = useAuth();
-  const canEditProducts = user?.role === 'ADMIN' || user?.role === 'PHARMACIST';
+  // --- CSV Bulk Upload Logic ---
+  const parseCSV = (text) => {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) return { headers: [], rows: [] };
 
-  const baseColumns = [
+    const parseLine = (line) => {
+      const cells = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          cells.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      cells.push(current.trim());
+      return cells;
+    };
+
+    const headers = parseLine(lines[0]).map((h) => h.replace(/^["']|["']$/g, '').trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = parseLine(lines[i]);
+      const rowObj = {};
+      headers.forEach((h, idx) => {
+        rowObj[h] = cells[idx] !== undefined ? cells[idx].replace(/^["']|["']$/g, '') : '';
+      });
+      rows.push(rowObj);
+    }
+    return { headers, rows };
+  };
+
+  const handleCSVFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = evt.target?.result;
+      if (typeof text !== 'string') return;
+
+      const { rows } = parseCSV(text);
+      const errors = [];
+      const validated = rows.map((r, idx) => {
+        const rowNum = idx + 2; // header is row 1
+        const name = (r.Name || r.name || '').trim();
+        const price = parseFloat(r.Unit_Price_ETB || r.unit_price);
+        const type = (r.Product_Type || r.product_type || 'MEDICINE').toUpperCase();
+
+        const rowErrors = [];
+        if (!name) rowErrors.push('Missing product name');
+        if (isNaN(price) || price < 0) rowErrors.push('Invalid unit price');
+        if (type !== 'MEDICINE' && type !== 'COSMETIC') rowErrors.push('Type must be MEDICINE or COSMETIC');
+
+        if (rowErrors.length > 0) {
+          errors.push({ row: rowNum, name: name || 'Unnamed', errors: rowErrors });
+        }
+
+        return {
+          ...r,
+          name,
+          unit_price: isNaN(price) ? 0 : price,
+          product_type: type,
+          isValid: rowErrors.length === 0,
+          errorString: rowErrors.join(', '),
+        };
+      });
+
+      setParsedRows(validated);
+      setBulkErrors(errors);
+      setImportSummary(null);
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleDownloadTemplate = () => {
+    window.open('/api/v1/products/import-template', '_blank');
+  };
+
+  const handleExecuteBulkImport = async () => {
+    const validRows = parsedRows.filter((r) => r.isValid);
+    if (validRows.length === 0) {
+      setErrorMessage('No valid rows to import.');
+      return;
+    }
+
+    setIsImporting(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await api.post('/products/bulk-upload', { products: validRows });
+      if (res.data.success) {
+        setImportSummary(res.data.data);
+        setSuccessMessage(res.data.message);
+        fetchProducts();
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Bulk upload failed');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const columns = [
     {
       header: t('products.name'),
       accessor: 'name',
       render: (row) => (
         <div>
           <div className="font-semibold text-slate-900">{row.name}</div>
-          {row.name_am && <div className="text-xs text-blue-600 font-medium">{row.name_am}</div>}
-          {row.generic_name && <div className="text-xs text-slate-400">Generic: {row.generic_name}</div>}
+          {row.name_am && <div className="text-xs text-slate-400 font-ethiopic">{row.name_am}</div>}
         </div>
       ),
     },
@@ -157,81 +298,97 @@ export const ProductsPage = () => {
       header: t('products.type'),
       accessor: 'product_type',
       render: (row) => (
-        <Badge variant={row.product_type === 'MEDICINE' ? 'info' : 'warning'}>
-          {row.product_type}
+        <Badge variant={row.product_type === 'MEDICINE' ? 'primary' : 'info'}>
+          {t(`products.${row.product_type.toLowerCase()}`)}
         </Badge>
       ),
     },
     {
-      header: t('products.dosage_form'),
-      accessor: 'dosage_form',
-      render: (row) => row.dosage_form ? `${row.dosage_form} ${row.strength || ''}` : '—',
+      header: t('products.category'),
+      accessor: 'category',
+      render: (row) => row.category?.name || '—',
     },
     {
       header: t('products.unit_price'),
       accessor: 'unit_price',
       render: (row) => (
-        <span className="font-bold text-slate-900">
-          {parseFloat(row.unit_price).toFixed(2)} ETB
+        <span className="font-semibold text-slate-800">
+          ETB {parseFloat(row.unit_price).toFixed(2)}
         </span>
       ),
     },
     {
       header: t('products.reorder_level'),
       accessor: 'reorder_level',
-      render: (row) => row.reorder_level,
+      render: (row) => <span className="font-mono text-xs text-slate-600">{row.reorder_level}</span>,
     },
     {
-      header: 'Prescription',
+      header: t('products.rx_required'),
       accessor: 'requires_prescription',
-      render: (row) =>
-        row.requires_prescription ? (
-          <Badge variant="danger" size="xs">Rx Required</Badge>
-        ) : (
-          <Badge variant="neutral" size="xs">OTC</Badge>
-        ),
+      render: (row) => (
+        <Badge variant={row.requires_prescription ? 'warning' : 'neutral'}>
+          {row.requires_prescription ? t('common.yes') : t('common.no')}
+        </Badge>
+      ),
     },
   ];
 
-  const columns = canEditProducts
-    ? [
-        ...baseColumns,
-        {
-          header: 'Actions',
-          accessor: 'actions',
-          render: (row) => (
-            <div className="flex items-center space-x-1">
-              <Button variant="ghost" size="sm" onClick={() => openEditModal(row)}>
-                <Edit2 className="w-3.5 h-3.5 text-slate-600" />
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => handleDeactivate(row.id)}>
-                <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-              </Button>
-            </div>
-          ),
-        },
-      ]
-    : baseColumns;
+  if (canEditProducts) {
+    columns.push({
+      header: 'Actions',
+      accessor: 'actions',
+      render: (row) => (
+        <div className="flex items-center space-x-2">
+          <Button variant="ghost" size="sm" onClick={() => openEditModal(row)}>
+            <Edit2 className="w-3.5 h-3.5 text-slate-600" />
+          </Button>
+          {user.role === 'ADMIN' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleDelete(row.id, row.name)}
+              className="hover:text-rose-600"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          )}
+        </div>
+      ),
+    });
+  }
 
   return (
     <div className="space-y-6">
-      {/* Page Title & Add Product Button */}
+      {/* Header & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
             {t('products.title')}
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            {canEditProducts
-              ? 'Manage pharmaceutical catalog, cosmetic products, and pricing in ETB'
-              : 'View pharmaceutical catalog and pricing (Cashier Read-Only View)'}
+            {t('products.total_count', { count: products.length })}
           </p>
         </div>
         {canEditProducts && (
-          <Button onClick={openAddModal} className="text-sm shadow-sm">
-            <Plus className="w-4 h-4 mr-1.5" />
-            {t('products.add_new')}
-          </Button>
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setParsedRows([]);
+                setBulkErrors([]);
+                setImportSummary(null);
+                setBulkModalOpen(true);
+              }}
+              className="text-sm shadow-xs border-slate-300"
+            >
+              <Upload className="w-4 h-4 mr-1.5 text-blue-600" />
+              Bulk Import CSV
+            </Button>
+            <Button onClick={openAddModal} className="text-sm shadow-sm">
+              <Plus className="w-4 h-4 mr-1.5" />
+              {t('products.add_new')}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -300,17 +457,19 @@ export const ProductsPage = () => {
               ]}
             />
             <Select
-              label="Category"
+              label={t('products.category')}
+              required
               value={formData.category_id}
               onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
-              placeholder="Select Category"
-              options={categories.map((c) => ({ value: c.id, label: `${c.name} (${c.type})` }))}
+              options={categories
+                .filter((c) => c.type === formData.product_type)
+                .map((c) => ({ value: c.id, label: c.name }))}
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Input
-              label={t('products.name')}
+              label={t('products.name_en')}
               required
               placeholder="e.g. Amoxicillin 500mg"
               value={formData.name}
@@ -324,58 +483,43 @@ export const ProductsPage = () => {
             />
           </div>
 
-          {/* Pharmaceutical Conditional Fields */}
-          {formData.product_type === 'MEDICINE' && (
-            <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 space-y-3">
-              <h5 className="text-xs font-bold uppercase tracking-wider text-blue-900">
-                Pharmaceutical Specifics
-              </h5>
-              <div className="grid grid-cols-3 gap-3">
-                <Input
-                  label={t('products.generic_name')}
-                  placeholder="e.g. Amoxicillin"
-                  value={formData.generic_name}
-                  onChange={(e) => setFormData({ ...formData, generic_name: e.target.value })}
-                />
-                <Input
-                  label={t('products.dosage_form')}
-                  placeholder="e.g. Capsule, Syrup"
-                  value={formData.dosage_form}
-                  onChange={(e) => setFormData({ ...formData, dosage_form: e.target.value })}
-                />
-                <Input
-                  label={t('products.strength')}
-                  placeholder="e.g. 500mg, 10ml"
-                  value={formData.strength}
-                  onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
-                />
-              </div>
-              <label className="flex items-center space-x-2 text-xs font-semibold text-slate-700 cursor-pointer pt-1">
-                <input
-                  type="checkbox"
-                  checked={formData.requires_prescription}
-                  onChange={(e) => setFormData({ ...formData, requires_prescription: e.target.checked })}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span>{t('products.requires_rx')}</span>
-              </label>
+          {formData.product_type === 'MEDICINE' ? (
+            <div className="grid grid-cols-3 gap-3">
+              <Input
+                label={t('products.generic_name')}
+                placeholder="Amoxicillin"
+                value={formData.generic_name}
+                onChange={(e) => setFormData({ ...formData, generic_name: e.target.value })}
+              />
+              <Input
+                label={t('products.dosage_form')}
+                placeholder="Capsule, Tablet, Syrup"
+                value={formData.dosage_form}
+                onChange={(e) => setFormData({ ...formData, dosage_form: e.target.value })}
+              />
+              <Input
+                label={t('products.strength')}
+                placeholder="500mg, 100ml"
+                value={formData.strength}
+                onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Brand"
+                placeholder="e.g. Nivea"
+                value={formData.brand}
+                onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
+              />
+              <Input
+                label="Volume / Size"
+                placeholder="e.g. 200ml, 50g"
+                value={formData.strength}
+                onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
+              />
             </div>
           )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label={t('products.brand')}
-              placeholder="e.g. Epharm, Nivea"
-              value={formData.brand}
-              onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
-            />
-            <Input
-              label={t('products.manufacturer')}
-              placeholder="e.g. Ethiopian Pharmaceuticals"
-              value={formData.manufacturer}
-              onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value })}
-            />
-          </div>
 
           <div className="grid grid-cols-3 gap-3">
             <Input
@@ -408,6 +552,176 @@ export const ProductsPage = () => {
             {editingProduct ? 'Update Product' : 'Save Product'}
           </Button>
         </form>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* Bulk Product Upload Modal with CSV Template                              */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={bulkModalOpen}
+        onClose={() => setBulkModalOpen(false)}
+        title="Mass Product Upload (CSV)"
+        maxWidth="max-w-3xl"
+      >
+        <div className="space-y-4">
+          {/* Step 1: Template download and guide */}
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center">
+                <FileSpreadsheet className="w-4 h-4 mr-1 text-blue-600" />
+                Customizable CSV Import Template
+              </h4>
+              <p className="text-xs text-blue-700">
+                Download the standardized CSV template with pre-filled examples for both <strong>MEDICINE</strong> and <strong>COSMETIC</strong> items.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadTemplate}
+              className="bg-white border-blue-300 text-blue-700 hover:bg-blue-100 flex-shrink-0"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Download Template (.csv)
+            </Button>
+          </div>
+
+          {/* Step 2: Upload CSV File */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-700 block">
+              Select CSV File to Upload
+            </label>
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full border-2 border-dashed border-slate-300 hover:border-blue-500 bg-slate-50 hover:bg-blue-50/50 rounded-2xl p-6 text-center cursor-pointer transition-colors"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleCSVFileChange}
+                className="hidden"
+              />
+              <Upload className="w-8 h-8 mx-auto text-slate-400 mb-2" />
+              <span className="text-sm font-semibold text-slate-800 block">
+                Click to browse or drag & drop CSV file
+              </span>
+              <span className="text-xs text-slate-400">
+                Accepts UTF-8 encoded .csv files with standard columns
+              </span>
+            </div>
+          </div>
+
+          {/* Step 3: Preview and Validation */}
+          {parsedRows.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h5 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Data Preview ({parsedRows.length} rows found)
+                </h5>
+                <div className="flex items-center space-x-2 text-xs">
+                  <span className="text-emerald-700 font-semibold">
+                    ✓ {parsedRows.filter((r) => r.isValid).length} Valid
+                  </span>
+                  {bulkErrors.length > 0 && (
+                    <span className="text-rose-600 font-semibold">
+                      ⚠ {bulkErrors.length} Invalid
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {bulkErrors.length > 0 && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 space-y-1 max-h-28 overflow-y-auto">
+                  <div className="font-bold">Validation Issues:</div>
+                  {bulkErrors.map((err, i) => (
+                    <div key={i}>
+                      Row {err.row} ({err.name}): {err.errors.join(', ')}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Table Preview (first 5 rows) */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-100 text-slate-600 font-semibold sticky top-0">
+                    <tr>
+                      <th className="p-2">#</th>
+                      <th className="p-2">Name</th>
+                      <th className="p-2">Type</th>
+                      <th className="p-2">Price (ETB)</th>
+                      <th className="p-2">Category</th>
+                      <th className="p-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {parsedRows.slice(0, 10).map((row, i) => (
+                      <tr key={i} className={row.isValid ? 'bg-white' : 'bg-rose-50/50'}>
+                        <td className="p-2 font-mono text-slate-400">{i + 1}</td>
+                        <td className="p-2 font-semibold text-slate-800">{row.name || '—'}</td>
+                        <td className="p-2">
+                          <Badge variant={row.product_type === 'COSMETIC' ? 'info' : 'primary'}>
+                            {row.product_type}
+                          </Badge>
+                        </td>
+                        <td className="p-2 font-mono">ETB {row.unit_price}</td>
+                        <td className="p-2 text-slate-600">{row.Category || row.category || 'Default'}</td>
+                        <td className="p-2">
+                          {row.isValid ? (
+                            <span className="text-emerald-600 font-semibold flex items-center">
+                              <Check className="w-3.5 h-3.5 mr-0.5" /> Ready
+                            </span>
+                          ) : (
+                            <span className="text-rose-600 font-semibold">{row.errorString}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {parsedRows.length > 10 && (
+                <p className="text-[11px] text-slate-400 text-right">
+                  Showing first 10 of {parsedRows.length} rows
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Step 4: Import confirmation */}
+          {importSummary && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 space-y-1">
+              <div className="font-bold flex items-center text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 mr-1 text-emerald-600" />
+                Bulk Import Completed!
+              </div>
+              <p>
+                Successfully imported <strong>{importSummary.successCount}</strong> products.
+                {importSummary.failedCount > 0 && ` ${importSummary.failedCount} rows skipped due to errors.`}
+              </p>
+            </div>
+          )}
+
+          <div className="pt-2">
+            <Button
+              type="button"
+              onClick={handleExecuteBulkImport}
+              disabled={isImporting || parsedRows.filter((r) => r.isValid).length === 0}
+              className="w-full py-2.5 font-bold bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {isImporting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  Importing Products...
+                </>
+              ) : (
+                `Import ${parsedRows.filter((r) => r.isValid).length} Valid Products`
+              )}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

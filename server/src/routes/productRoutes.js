@@ -7,6 +7,8 @@ router.use(authenticate);
 
 // Specific sub-paths before parameterized paths
 router.get('/search', ctrl.searchProducts);
+router.get('/import-template', ctrl.getImportTemplate);
+router.post('/bulk-upload', requireRole(['ADMIN', 'PHARMACIST']), ctrl.bulkUploadProducts);
 router.get('/low-stock', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getLowStock);
 router.get('/expiring', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getExpiring);
 

@@ -244,7 +244,197 @@ const getExpiring = async (req, res, next) => {
   }
 };
 
+// GET /api/v1/products/import-template
+const getImportTemplate = (req, res) => {
+  const headers = [
+    'Name',
+    'Name_Amharic',
+    'Product_Type',
+    'Category',
+    'Generic_Name',
+    'Dosage_Form',
+    'Strength',
+    'Brand',
+    'Manufacturer',
+    'Unit_Price_ETB',
+    'Reorder_Level',
+    'Barcode',
+    'Requires_Prescription',
+    'Description',
+  ];
+
+  const samples = [
+    [
+      'Amoxicillin 500mg',
+      'አሞክሲሊን 500mg',
+      'MEDICINE',
+      'Antibiotics',
+      'Amoxicillin',
+      'Capsule',
+      '500mg',
+      'Epharm',
+      'Ethiopian Pharmaceuticals',
+      '18.50',
+      '20',
+      'MED-AMX-500',
+      'true',
+      'Broad-spectrum antibiotic for bacterial infections',
+    ],
+    [
+      'Paracetamol 500mg',
+      'ፓራሲታሞል 500mg',
+      'MEDICINE',
+      'Pain Relief',
+      'Paracetamol',
+      'Tablet',
+      '500mg',
+      'Cadila',
+      'Cadila Pharmaceuticals',
+      '5.00',
+      '50',
+      'MED-PCM-500',
+      'false',
+      'Analgesic and antipyretic for pain and fever',
+    ],
+    [
+      'Nivea Soft Moisturizing Cream',
+      'ኒቪያ ሶፍት ክሬም',
+      'COSMETIC',
+      'Skincare',
+      '',
+      'Cream',
+      '200ml',
+      'Nivea',
+      'Beiersdorf',
+      '350.00',
+      '15',
+      'COS-NIV-200',
+      'false',
+      'Refreshing soft moisturizing cream with Jojoba oil',
+    ],
+  ];
+
+  const csv = [
+    headers.join(','),
+    ...samples.map((row) => row.map((cell) => `"${cell}"`).join(',')),
+  ].join('\n');
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename=product_import_template.csv');
+  res.send(csv);
+};
+
+// POST /api/v1/products/bulk-upload
+const bulkUploadProducts = async (req, res, next) => {
+  try {
+    const { products } = req.body;
+
+    if (!products || !Array.isArray(products) || products.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION', message: 'An array of products is required for bulk upload' },
+      });
+    }
+
+    const categories = await prisma.category.findMany();
+    const categoryMap = new Map();
+    categories.forEach((cat) => {
+      categoryMap.set(cat.name.toLowerCase().trim(), cat.id);
+    });
+
+    const results = {
+      total: products.length,
+      successCount: 0,
+      failedCount: 0,
+      errors: [],
+      created: [],
+    };
+
+    for (let i = 0; i < products.length; i++) {
+      const item = products[i];
+      const rowNum = i + 1;
+
+      if (!item.name || !item.name.trim()) {
+        results.failedCount++;
+        results.errors.push({ row: rowNum, error: 'Product name is required' });
+        continue;
+      }
+
+      const rawType = (item.product_type || item.Product_Type || 'MEDICINE').toUpperCase().trim();
+      const productType = rawType === 'COSMETIC' ? 'COSMETIC' : 'MEDICINE';
+
+      const unitPrice = parseFloat(item.unit_price || item.Unit_Price_ETB);
+      if (isNaN(unitPrice) || unitPrice < 0) {
+        results.failedCount++;
+        results.errors.push({ row: rowNum, error: `Invalid unit price: ${item.unit_price || item.Unit_Price_ETB}` });
+        continue;
+      }
+
+      const catName = (item.category || item.Category || '').toLowerCase().trim();
+      let categoryId = categoryMap.get(catName);
+
+      if (!categoryId) {
+        const fallbackCat = categories.find((c) => c.type === productType);
+        categoryId = fallbackCat ? fallbackCat.id : null;
+      }
+
+      const reorderLevel = parseInt(item.reorder_level || item.Reorder_Level) || 10;
+      const requiresRx = String(item.requires_prescription || item.Requires_Prescription).toLowerCase() === 'true';
+
+      try {
+        const created = await prisma.product.create({
+          data: {
+            name: (item.name || item.Name).trim(),
+            name_am: item.name_am || item.Name_Amharic || null,
+            generic_name: item.generic_name || item.Generic_Name || null,
+            category_id: categoryId,
+            product_type: productType,
+            dosage_form: item.dosage_form || item.Dosage_Form || null,
+            strength: item.strength || item.Strength || null,
+            brand: item.brand || item.Brand || null,
+            manufacturer: item.manufacturer || item.Manufacturer || null,
+            unit_price: unitPrice,
+            reorder_level: reorderLevel,
+            requires_prescription: requiresRx,
+            barcode: item.barcode || item.Barcode || null,
+            description: item.description || item.Description || null,
+          },
+        });
+
+        results.successCount++;
+        results.created.push({ id: created.id, name: created.name });
+      } catch (err) {
+        results.failedCount++;
+        results.errors.push({ row: rowNum, error: err.message });
+      }
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        user_id: req.user.id,
+        action: 'BULK_IMPORT',
+        entity_type: 'PRODUCT',
+        entity_id: results.created[0]?.id || null,
+        details: {
+          total: results.total,
+          successCount: results.successCount,
+          failedCount: results.failedCount,
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      data: results,
+      message: `Successfully imported ${results.successCount} of ${results.total} products.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getProducts, searchProducts, getProduct, createProduct,
   updateProduct, deleteProduct, getLowStock, getExpiring,
+  getImportTemplate, bulkUploadProducts,
 };
