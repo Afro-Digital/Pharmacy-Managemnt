@@ -1,19 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Ethiopic:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --color-primary: #2563EB;
-  --color-primary-hover: #1D4ED8;
-  --color-primary-light: #EFF6FF;
-  --color-secondary: #1E40AF;
-  --color-secondary-hover: #1E3A8A;
+  --color-canvas: #F4F5FA;
+  --color-primary: #5345E6;
+  --color-primary-hover: #4336D6;
+  --color-primary-light: #F0EEFA;
+  --color-secondary: #0D9488;
+  --color-secondary-hover: #0F766E;
+  --color-surface: #FFFFFF;
 }
 
 @layer base {
-  body {
-    @apply bg-slate-50 text-slate-900 selection:bg-blue-500 selection:text-white;
+  html {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   }
+
+  body {
+    background-color: var(--color-canvas);
+    color: #111827;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Custom delicate scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
 }
 
 /* Print styles for receipt */

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { QRCodeSVG } from 'qrcode.react';
-import api from '../../services/api';
+import api, { resolveAssetUrl } from '../../services/api';
 import { Table } from '../../components/ui/Table';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -257,7 +257,7 @@ export const PrescriptionsPage = () => {
           {row.image_url && (
             <button
               onClick={() => {
-                setSelectedImageUrl(row.image_url);
+                setSelectedImageUrl(resolveAssetUrl(row.image_url));
                 setImagePreviewModalOpen(true);
               }}
               className="p-1 rounded-md bg-purple-50 text-purple-600 hover:bg-purple-100 transition-colors"
@@ -656,11 +656,11 @@ export const PrescriptionsPage = () => {
               <div className="p-2 border border-slate-200 rounded-xl bg-slate-50 text-center">
                 <span className="text-xs font-semibold text-slate-700 block mb-1.5">Attached Prescription Photo:</span>
                 <img
-                  src={selectedRx.image_url}
+                  src={resolveAssetUrl(selectedRx.image_url)}
                   alt="Prescription"
                   className="max-h-48 mx-auto object-contain rounded-lg cursor-pointer hover:opacity-95"
                   onClick={() => {
-                    setSelectedImageUrl(selectedRx.image_url);
+                    setSelectedImageUrl(resolveAssetUrl(selectedRx.image_url));
                     setImagePreviewModalOpen(true);
                   }}
                 />

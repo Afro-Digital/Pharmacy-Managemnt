@@ -1,7 +1,23 @@
 import axios from 'axios';
 
+export const API_BASE = import.meta.env.VITE_API_URL || '/api/v1';
+
+export const API_ORIGIN = (() => {
+  try {
+    return new URL(API_BASE).origin;
+  } catch {
+    return '';
+  }
+})();
+
+export function resolveAssetUrl(url) {
+  if (!url) return url;
+  if (/^https?:\/\//.test(url)) return url;
+  return `${API_ORIGIN}${url}`;
+}
+
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -31,7 +47,7 @@ api.interceptors.response.use(
 
       if (refreshToken) {
         try {
-          const res = await axios.post('/api/v1/auth/refresh', { refreshToken });
+          const res = await axios.post(`${API_BASE}/auth/refresh`, { refreshToken });
           if (res.data.success) {
             localStorage.setItem('tilex_access_token', res.data.data.accessToken);
             if (res.data.data.refreshToken) {

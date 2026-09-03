@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import api from '../../services/api';
+import api, { API_BASE } from '../../services/api';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -59,7 +59,7 @@ export const ReportsPage = () => {
   const handleExportCSV = async (reportType) => {
     try {
       const token = localStorage.getItem('tilex_access_token');
-      const response = await fetch(`/api/v1/reports/export?type=csv&report=${reportType}`, {
+      const response = await fetch(`${API_BASE}/reports/export?type=csv&report=${reportType}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const blob = await response.blob();

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
+import api, { API_BASE } from '../../services/api';
 import { Table } from '../../components/ui/Table';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -256,7 +256,7 @@ export const ProductsPage = () => {
   };
 
   const handleDownloadTemplate = () => {
-    window.open('/api/v1/products/import-template', '_blank');
+    window.open(`${API_BASE}/products/import-template`, '_blank');
   };
 
   const handleExecuteBulkImport = async () => {
@@ -288,9 +288,24 @@ export const ProductsPage = () => {
       header: t('products.name'),
       accessor: 'name',
       render: (row) => (
-        <div>
-          <div className="font-semibold text-slate-900">{row.name}</div>
-          {row.name_am && <div className="text-xs text-slate-400 font-ethiopic">{row.name_am}</div>}
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200/60 flex items-center justify-center text-slate-600 flex-shrink-0">
+            {row.product_type === 'COSMETIC' ? (
+              <Package className="w-4 h-4 text-purple-600" />
+            ) : (
+              <Package className="w-4 h-4 text-[#5345E6]" />
+            )}
+          </div>
+          <div>
+            <div className="font-bold text-slate-900 text-sm">{row.name}</div>
+            {row.name_am ? (
+              <div className="text-[11px] text-slate-400 font-ethiopic">{row.name_am}</div>
+            ) : (
+              <div className="text-[11px] text-slate-400 font-medium">
+                {row.generic_name || row.brand || 'General Product'}
+              </div>
+            )}
+          </div>
         </div>
       ),
     },
@@ -306,13 +321,17 @@ export const ProductsPage = () => {
     {
       header: t('products.category'),
       accessor: 'category',
-      render: (row) => row.category?.name || '—',
+      render: (row) => (
+        <span className="text-xs font-semibold text-slate-600">
+          {row.category?.name || '—'}
+        </span>
+      ),
     },
     {
       header: t('products.unit_price'),
       accessor: 'unit_price',
       render: (row) => (
-        <span className="font-semibold text-slate-800">
+        <span className="font-bold text-slate-900">
           ETB {parseFloat(row.unit_price).toFixed(2)}
         </span>
       ),
@@ -320,7 +339,11 @@ export const ProductsPage = () => {
     {
       header: t('products.reorder_level'),
       accessor: 'reorder_level',
-      render: (row) => <span className="font-mono text-xs text-slate-600">{row.reorder_level}</span>,
+      render: (row) => (
+        <span className="font-mono text-xs text-slate-500 font-medium">
+          {row.reorder_level} units
+        </span>
+      ),
     },
     {
       header: t('products.rx_required'),
@@ -338,19 +361,24 @@ export const ProductsPage = () => {
       header: 'Actions',
       accessor: 'actions',
       render: (row) => (
-        <div className="flex items-center space-x-2">
-          <Button variant="ghost" size="sm" onClick={() => openEditModal(row)}>
-            <Edit2 className="w-3.5 h-3.5 text-slate-600" />
-          </Button>
+        <div className="flex items-center space-x-1.5">
+          <button
+            type="button"
+            onClick={() => openEditModal(row)}
+            className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-[#5345E6] flex items-center justify-center transition-colors"
+            title="Edit Product"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+          </button>
           {user.role === 'ADMIN' && (
-            <Button
-              variant="ghost"
-              size="sm"
+            <button
+              type="button"
               onClick={() => handleDelete(row.id, row.name)}
-              className="hover:text-rose-600"
+              className="w-8 h-8 rounded-full hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center transition-colors"
+              title="Deactivate Product"
             >
               <Trash2 className="w-3.5 h-3.5" />
-            </Button>
+            </button>
           )}
         </div>
       ),
@@ -365,26 +393,26 @@ export const ProductsPage = () => {
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
             {t('products.title')}
           </h2>
-          <p className="text-sm text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-400 mt-0.5">
             {t('products.total_count', { count: products.length })}
           </p>
         </div>
         {canEditProducts && (
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2.5">
             <Button
-              variant="outline"
+              variant="secondary"
               onClick={() => {
                 setParsedRows([]);
                 setBulkErrors([]);
                 setImportSummary(null);
                 setBulkModalOpen(true);
               }}
-              className="text-sm shadow-xs border-slate-300"
+              className="text-xs font-bold px-4 py-2.5"
             >
-              <Upload className="w-4 h-4 mr-1.5 text-blue-600" />
+              <Upload className="w-3.5 h-3.5 mr-1.5" />
               Bulk Import CSV
             </Button>
-            <Button onClick={openAddModal} className="text-sm shadow-sm">
+            <Button onClick={openAddModal} className="text-xs font-bold px-4 py-2.5 shadow-xs">
               <Plus className="w-4 h-4 mr-1.5" />
               {t('products.add_new')}
             </Button>
@@ -408,6 +436,7 @@ export const ProductsPage = () => {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1">
           <Input
+            pill
             placeholder={t('products.search')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -415,6 +444,7 @@ export const ProductsPage = () => {
         </div>
         <div className="w-full sm:w-44">
           <Select
+            pill
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
             placeholder={t('products.all_types')}
@@ -426,6 +456,7 @@ export const ProductsPage = () => {
         </div>
         <div className="w-full sm:w-52">
           <Select
+            pill
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
             placeholder={t('products.all_categories')}

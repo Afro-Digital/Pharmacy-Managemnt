@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { Camera, Upload, CheckCircle2, AlertCircle, RefreshCw, Pill, ArrowLeft } from 'lucide-react';
+import { API_BASE } from '../../services/api';
 
 export const MobileRxUploadPage = () => {
   const { sessionId } = useParams();
@@ -36,7 +37,7 @@ export const MobileRxUploadPage = () => {
     formData.append('image', selectedFile);
 
     try {
-      const res = await axios.post(`/api/v1/prescriptions/upload-session/${sessionId}`, formData, {
+      const res = await axios.post(`${API_BASE}/prescriptions/upload-session/${sessionId}`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

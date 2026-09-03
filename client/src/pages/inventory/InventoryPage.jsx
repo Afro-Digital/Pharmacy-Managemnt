@@ -236,9 +236,20 @@ export const InventoryPage = () => {
       header: t('inventory.product'),
       accessor: 'product',
       render: (row) => (
-        <div>
-          <div className="font-semibold text-slate-900">{row.product?.name}</div>
-          <div className="text-xs text-slate-400">{row.product?.generic_name || row.product?.brand}</div>
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200/60 flex items-center justify-center text-slate-600 flex-shrink-0">
+            {row.product?.product_type === 'COSMETIC' ? (
+              <Package className="w-4 h-4 text-purple-600" />
+            ) : (
+              <Boxes className="w-4 h-4 text-[#5345E6]" />
+            )}
+          </div>
+          <div>
+            <div className="font-bold text-slate-900 text-sm">{row.product?.name}</div>
+            <div className="text-[11px] text-slate-400 font-medium">
+              {row.product?.generic_name || row.product?.brand || 'Pharmaceutical Product'}
+            </div>
+          </div>
         </div>
       ),
     },
@@ -342,20 +353,20 @@ export const InventoryPage = () => {
             Manage bulk Store inventory, retail Dispensary counter, and stock movements
           </p>
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2.5">
           <Button
             onClick={() => setReceiveModalOpen(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-sm shadow-sm"
+            className="text-xs font-bold px-4 py-2.5 shadow-xs"
           >
             <Plus className="w-4 h-4 mr-1.5" />
             {t('inventory.add_stock')}
           </Button>
           <Button
             onClick={() => setTransferModalOpen(true)}
-            variant="outline"
-            className="text-sm"
+            variant="secondary"
+            className="text-xs font-bold px-4 py-2.5"
           >
-            <ArrowRightLeft className="w-4 h-4 mr-1.5 text-slate-500" />
+            <ArrowRightLeft className="w-4 h-4 mr-1.5" />
             {t('inventory.transfer_stock')}
           </Button>
         </div>
@@ -373,41 +384,43 @@ export const InventoryPage = () => {
         </Alert>
       )}
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200">
-        <button
-          onClick={() => setActiveTab('STORE')}
-          className={`flex items-center px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
-            activeTab === 'STORE'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Warehouse className="w-4 h-4 mr-2" />
-          {t('inventory.store_tab')}
-        </button>
-        <button
-          onClick={() => setActiveTab('DISPENSARY')}
-          className={`flex items-center px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
-            activeTab === 'DISPENSARY'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <Store className="w-4 h-4 mr-2" />
-          {t('inventory.dispensary_tab')}
-        </button>
-        <button
-          onClick={() => setActiveTab('TRANSFERS')}
-          className={`flex items-center px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
-            activeTab === 'TRANSFERS'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <ArrowRightLeft className="w-4 h-4 mr-2" />
-          {t('inventory.transfers_tab')}
-        </button>
+      {/* SellMate Styled Segmented Control Tabs */}
+      <div className="flex items-center">
+        <div className="inline-flex p-1 bg-slate-100 rounded-full border border-slate-200/50">
+          <button
+            onClick={() => setActiveTab('STORE')}
+            className={`flex items-center px-4 py-2 text-xs font-bold rounded-full transition-all ${
+              activeTab === 'STORE'
+                ? 'bg-white text-[#5345E6] shadow-xs'
+                : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Warehouse className="w-3.5 h-3.5 mr-1.5" />
+            {t('inventory.store_tab')}
+          </button>
+          <button
+            onClick={() => setActiveTab('DISPENSARY')}
+            className={`flex items-center px-4 py-2 text-xs font-bold rounded-full transition-all ${
+              activeTab === 'DISPENSARY'
+                ? 'bg-white text-[#5345E6] shadow-xs'
+                : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Store className="w-3.5 h-3.5 mr-1.5" />
+            {t('inventory.dispensary_tab')}
+          </button>
+          <button
+            onClick={() => setActiveTab('TRANSFERS')}
+            className={`flex items-center px-4 py-2 text-xs font-bold rounded-full transition-all ${
+              activeTab === 'TRANSFERS'
+                ? 'bg-white text-[#5345E6] shadow-xs'
+                : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+            {t('inventory.transfers_tab')}
+          </button>
+        </div>
       </div>
 
       {/* Filter Row (only for Store/Dispensary) */}
