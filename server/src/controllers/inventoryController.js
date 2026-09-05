@@ -216,20 +216,20 @@ const bulkReceiveStock = async (req, res, next) => {
   }
 };
 
-// PUT /api/v1/inventory/:id (Adjust stock)
+// PUT /api/v1/inventory/:id (Adjust stock / update expiration date & batch)
 const adjustStock = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { quantity, reason } = req.body;
+    const { quantity, reason, expiry_date, batch_number, shelf_location } = req.body;
 
-    if (quantity === undefined || !reason) {
+    if (quantity === undefined && expiry_date === undefined && batch_number === undefined && shelf_location === undefined) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION', message: 'New quantity and reason are required for stock adjustment' },
+        error: { code: 'VALIDATION', message: 'At least one field (quantity, expiry_date, batch_number, shelf_location) is required for adjustment' },
       });
     }
 
-    const current = await prisma.inventory.findUnique({ where: { id } });
+    const current = await prisma.inventory.findUnique({ where: { id }, include: { product: true } });
     if (!current) {
       return res.status(404).json({
         success: false,
@@ -237,26 +237,44 @@ const adjustStock = async (req, res, next) => {
       });
     }
 
+    const updateData = {};
+    if (quantity !== undefined && quantity !== null && quantity !== '') {
+      updateData.quantity = parseInt(quantity);
+    }
+    if (expiry_date !== undefined) {
+      updateData.expiry_date = expiry_date ? new Date(expiry_date) : null;
+    }
+    if (batch_number !== undefined) {
+      updateData.batch_number = batch_number || null;
+    }
+    if (shelf_location !== undefined) {
+      updateData.shelf_location = shelf_location || null;
+    }
+
     const inventory = await prisma.inventory.update({
       where: { id },
-      data: { quantity: parseInt(quantity) },
+      data: updateData,
       include: { product: true },
     });
 
     await prisma.auditLog.create({
       data: {
-        user_id: req.user.id, action: 'ADJUST_STOCK', entity_type: 'INVENTORY',
+        user_id: req.user.id,
+        action: 'ADJUST_STOCK',
+        entity_type: 'INVENTORY',
         entity_id: id,
         details: {
           previous_quantity: current.quantity,
-          new_quantity: parseInt(quantity),
-          difference: parseInt(quantity) - current.quantity,
-          reason,
+          new_quantity: updateData.quantity !== undefined ? updateData.quantity : current.quantity,
+          difference: updateData.quantity !== undefined ? updateData.quantity - current.quantity : 0,
+          previous_expiry: current.expiry_date,
+          new_expiry: updateData.expiry_date !== undefined ? updateData.expiry_date : current.expiry_date,
+          reason: reason || 'Stock / expiration date updated',
         },
       },
     });
 
-    res.json({ success: true, data: inventory, message: 'Stock adjusted successfully' });
+    res.json({ success: true, data: inventory, message: 'Stock and expiration date updated successfully' });
   } catch (err) {
     next(err);
   }

@@ -129,6 +129,16 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(res.text).toContain('COSMETIC');
     });
 
+    it('Allows direct browser download of CSV template without auth header', async () => {
+      const res = await request(app)
+        .get('/api/v1/products/import-template');
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['content-disposition']).toContain('attachment; filename=product_import_template.csv');
+      expect(res.text).toContain('MEDICINE');
+    });
+
     it('Rejects non-admin bulk upload with 403 Forbidden', async () => {
       const res = await request(app)
         .post('/api/v1/products/bulk-upload')
@@ -197,6 +207,86 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(res.statusCode).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.count).toBe(2);
+    });
+
+    it('Creates medicine or cosmetic with expiration date and batch number', async () => {
+      const res = await request(app)
+        .post('/api/v1/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Ciprofloxacin 500mg',
+          product_type: 'MEDICINE',
+          unit_price: 32.50,
+          reorder_level: 15,
+          expiry_date: '2027-12-31',
+          batch_number: 'CIPRO-2025-01',
+          initial_quantity: 40,
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.inventory).toBeDefined();
+      expect(res.body.data.inventory.length).toBeGreaterThan(0);
+      expect(res.body.data.inventory[0].batch_number).toBe('CIPRO-2025-01');
+      expect(res.body.data.inventory[0].expiry_date).toContain('2027-12-31');
+    });
+
+    it('Edits and changes expiration date on existing product', async () => {
+      // First create a product
+      const createRes = await request(app)
+        .post('/api/v1/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Glycerin Skin Lotion',
+          product_type: 'COSMETIC',
+          unit_price: 150.00,
+          expiry_date: '2026-06-30',
+          batch_number: 'GLY-01',
+        });
+
+      expect(createRes.statusCode).toBe(201);
+      const prodId = createRes.body.data.id;
+
+      // Update the expiration date to 2028-09-30
+      const updateRes = await request(app)
+        .put(`/api/v1/products/${prodId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          expiry_date: '2028-09-30',
+          batch_number: 'GLY-01-REVISED',
+        });
+
+      expect(updateRes.statusCode).toBe(200);
+      expect(updateRes.body.success).toBe(true);
+
+      const verifyRes = await request(app)
+        .get(`/api/v1/products/${prodId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(verifyRes.statusCode).toBe(200);
+      expect(verifyRes.body.data.inventory[0].expiry_date).toContain('2028-09-30');
+      expect(verifyRes.body.data.inventory[0].batch_number).toBe('GLY-01-REVISED');
+    });
+
+    it('Updates expiration date directly on inventory record via /api/v1/inventory/:id', async () => {
+      const invListRes = await request(app)
+        .get('/api/v1/inventory')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      const item = invListRes.body.data[0];
+      expect(item).toBeDefined();
+
+      const adjustRes = await request(app)
+        .put(`/api/v1/inventory/${item.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          expiry_date: '2029-05-15',
+          reason: 'Corrected factory expiry date',
+        });
+
+      expect(adjustRes.statusCode).toBe(200);
+      expect(adjustRes.body.success).toBe(true);
+      expect(adjustRes.body.data.expiry_date).toContain('2029-05-15');
     });
   });
 });

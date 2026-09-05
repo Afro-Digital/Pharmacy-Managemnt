@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Check,
   Eye,
+  Calendar,
 } from 'lucide-react';
 
 export const ProductsPage = () => {
@@ -57,6 +58,15 @@ export const ProductsPage = () => {
   const [importSummary, setImportSummary] = useState(null);
   const fileInputRef = useRef(null);
 
+  const formatExpiryForInput = (dateStr) => {
+    if (!dateStr) return '';
+    try {
+      return new Date(dateStr).toISOString().split('T')[0];
+    } catch {
+      return '';
+    }
+  };
+
   const initialFormState = {
     name: '',
     name_am: '',
@@ -72,6 +82,11 @@ export const ProductsPage = () => {
     requires_prescription: false,
     barcode: '',
     description: '',
+    expiry_date: '',
+    batch_number: '',
+    initial_quantity: '',
+    initial_location: 'STORE',
+    inventory_id: '',
   };
 
   const [formData, setFormData] = useState(initialFormState);
@@ -119,6 +134,7 @@ export const ProductsPage = () => {
 
   const openEditModal = (prod) => {
     setEditingProduct(prod);
+    const primaryInv = prod.inventory?.[0];
     setFormData({
       name: prod.name || '',
       name_am: prod.name_am || '',
@@ -134,6 +150,11 @@ export const ProductsPage = () => {
       requires_prescription: prod.requires_prescription || false,
       barcode: prod.barcode || '',
       description: prod.description || '',
+      expiry_date: formatExpiryForInput(primaryInv?.expiry_date),
+      batch_number: primaryInv?.batch_number || '',
+      initial_quantity: primaryInv?.quantity !== undefined ? primaryInv.quantity : '',
+      initial_location: primaryInv?.location || 'STORE',
+      inventory_id: primaryInv?.id || '',
     });
     setProductModalOpen(true);
   };
@@ -242,11 +263,18 @@ export const ProductsPage = () => {
           errors.push({ row: rowNum, name: name || 'Unnamed', errors: rowErrors });
         }
 
+        const expiry_date = (r.Expiry_Date || r.expiry_date || '').trim();
+        const batch_number = (r.Batch_Number || r.batch_number || '').trim();
+        const quantity = (r.Quantity || r.quantity || '').trim();
+
         return {
           ...r,
           name,
           unit_price: isNaN(price) ? 0 : price,
           product_type: type,
+          expiry_date,
+          batch_number,
+          quantity,
           isValid: rowErrors.length === 0,
           errorString: rowErrors.join(', '),
         };
@@ -372,6 +400,49 @@ export const ProductsPage = () => {
           {row.requires_prescription ? t('common.yes') : t('common.no')}
         </Badge>
       ),
+    },
+    {
+      header: 'Expiration Date',
+      accessor: 'expiry_date',
+      render: (row) => {
+        const batches = row.inventory?.filter((i) => i.expiry_date) || [];
+        if (batches.length === 0) {
+          return (
+            <span className="text-xs text-slate-400 font-medium italic">
+              Not Set
+            </span>
+          );
+        }
+
+        const sorted = [...batches].sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date));
+        const earliest = sorted[0].expiry_date;
+        const exp = new Date(earliest);
+        const today = new Date();
+        const thirtyDays = new Date();
+        thirtyDays.setDate(today.getDate() + 30);
+        const dateFormatted = exp.toISOString().split('T')[0];
+
+        let badgeVariant = 'success';
+        let label = dateFormatted;
+        if (exp < today) {
+          badgeVariant = 'danger';
+          label = `Expired: ${dateFormatted}`;
+        } else if (exp <= thirtyDays) {
+          badgeVariant = 'warning';
+          label = `Exp: ${dateFormatted}`;
+        }
+
+        return (
+          <div className="flex flex-col items-start gap-0.5">
+            <Badge variant={badgeVariant}>{label}</Badge>
+            {batches.length > 1 && (
+              <span className="text-[10px] text-slate-400 font-medium">
+                +{batches.length - 1} other {batches.length - 1 === 1 ? 'batch' : 'batches'}
+              </span>
+            )}
+          </div>
+        );
+      },
     },
   ];
 
@@ -611,8 +682,116 @@ export const ProductsPage = () => {
             />
           </div>
 
+          {/* Expiration Date & Batch Tracking Section */}
+          <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-slate-800 font-bold text-xs">
+                <Calendar className="w-4 h-4 text-[#5345E6]" />
+                <span>Expiration & Batch Tracking</span>
+              </div>
+              <span className="text-[10px] text-slate-500 font-medium">
+                {editingProduct ? 'Edit, add, or change expiration date' : 'Set initial expiration date & batch'}
+              </span>
+            </div>
+
+            {editingProduct && editingProduct.inventory && editingProduct.inventory.length > 1 && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-600 block">Select Batch to Update</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto pr-1">
+                  {editingProduct.inventory.map((inv) => {
+                    const isSelected = formData.inventory_id === inv.id;
+                    return (
+                      <button
+                        key={inv.id}
+                        type="button"
+                        onClick={() => {
+                          setFormData({
+                            ...formData,
+                            inventory_id: inv.id,
+                            batch_number: inv.batch_number || '',
+                            expiry_date: formatExpiryForInput(inv.expiry_date),
+                          });
+                        }}
+                        className={`text-left p-2.5 rounded-xl border text-xs transition-all ${
+                          isSelected
+                            ? 'border-[#5345E6] bg-indigo-50/60 font-bold text-[#5345E6]'
+                            : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span>{inv.batch_number || 'Default Batch'}</span>
+                          <span className="text-[10px] font-mono text-slate-500">{inv.location} ({inv.quantity} units)</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          Exp: {inv.expiry_date ? new Date(inv.expiry_date).toISOString().split('T')[0] : 'None'}
+                        </div>
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData({
+                        ...formData,
+                        inventory_id: '',
+                        batch_number: '',
+                        expiry_date: '',
+                      });
+                    }}
+                    className={`text-left p-2.5 rounded-xl border border-dashed text-xs transition-all flex items-center justify-center ${
+                      !formData.inventory_id
+                        ? 'border-[#5345E6] bg-indigo-50/60 font-bold text-[#5345E6]'
+                        : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    + Add New Batch / Expiry Date
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="Expiration Date"
+                type="date"
+                value={formData.expiry_date}
+                onChange={(e) => setFormData({ ...formData, expiry_date: e.target.value })}
+                helper="Date after which item must not be dispensed"
+              />
+              <Input
+                label="Batch / Lot Number"
+                placeholder="e.g. BATCH-2026-01"
+                value={formData.batch_number}
+                onChange={(e) => setFormData({ ...formData, batch_number: e.target.value })}
+                helper="Manufacturer lot or batch code"
+              />
+            </div>
+
+            {!editingProduct && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <Input
+                  label="Initial Stock Quantity (Optional)"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={formData.initial_quantity}
+                  onChange={(e) => setFormData({ ...formData, initial_quantity: e.target.value })}
+                />
+                <Select
+                  label="Initial Stock Location"
+                  value={formData.initial_location || 'STORE'}
+                  onChange={(e) => setFormData({ ...formData, initial_location: e.target.value })}
+                  options={[
+                    { value: 'STORE', label: 'Store (Bulk Warehouse)' },
+                    { value: 'DISPENSARY', label: 'Dispensary (Front Counter)' },
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+
           <Button type="submit" className="w-full py-2.5 font-bold mt-2">
-            {editingProduct ? 'Update Product' : 'Save Product'}
+            {editingProduct ? 'Update Product & Expiration' : 'Save Product & Expiration'}
           </Button>
         </form>
       </Modal>
@@ -716,6 +895,8 @@ export const ProductsPage = () => {
                       <th className="p-2">Type</th>
                       <th className="p-2">Price (ETB)</th>
                       <th className="p-2">Category</th>
+                      <th className="p-2">Expiry Date</th>
+                      <th className="p-2">Batch No.</th>
                       <th className="p-2">Status</th>
                     </tr>
                   </thead>
@@ -731,6 +912,16 @@ export const ProductsPage = () => {
                         </td>
                         <td className="p-2 font-mono">ETB {row.unit_price}</td>
                         <td className="p-2 text-slate-600">{row.Category || row.category || 'Default'}</td>
+                        <td className="p-2 font-mono text-slate-700">
+                          {row.expiry_date ? (
+                            <span className="text-emerald-700 font-semibold">{row.expiry_date}</span>
+                          ) : (
+                            <span className="text-slate-400 italic">None</span>
+                          )}
+                        </td>
+                        <td className="p-2 font-mono text-slate-600">
+                          {row.batch_number || '—'}
+                        </td>
                         <td className="p-2">
                           {row.isValid ? (
                             <span className="text-emerald-600 font-semibold flex items-center">
@@ -879,6 +1070,40 @@ export const ProductsPage = () => {
               </div>
             )}
 
+            {/* Stock Batches & Expiration Dates Section */}
+            <div className="p-3.5 bg-white rounded-xl border border-slate-100 space-y-2">
+              <span className="text-slate-500 font-semibold block uppercase text-[10px]">
+                Stock Batches & Expiration Dates
+              </span>
+              {selectedProductForView.inventory && selectedProductForView.inventory.length > 0 ? (
+                <div className="divide-y divide-slate-100 text-xs">
+                  {selectedProductForView.inventory.map((inv, idx) => (
+                    <div key={idx} className="py-2 flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-slate-800">
+                          Batch: {inv.batch_number || 'Default Batch'}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Location: {inv.location} • Qty: {inv.quantity} units {inv.shelf_location ? `• Shelf: ${inv.shelf_location}` : ''}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        {inv.expiry_date ? (
+                          <span className="font-mono font-semibold text-slate-700">
+                            Exp: {new Date(inv.expiry_date).toISOString().split('T')[0]}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">No expiry recorded</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 italic">No inventory batches registered yet.</p>
+              )}
+            </div>
+
             <div className="flex items-center justify-between pt-2 border-t border-slate-100">
               <Button
                 variant="outline"
@@ -897,7 +1122,7 @@ export const ProductsPage = () => {
                   }}
                   className="text-xs"
                 >
-                  <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit Product
+                  <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit Product & Expiration
                 </Button>
               )}
             </div>

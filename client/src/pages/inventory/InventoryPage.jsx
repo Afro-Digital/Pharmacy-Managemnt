@@ -81,6 +81,8 @@ export const InventoryPage = () => {
   // Adjust Form
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
+  const [adjustExpiry, setAdjustExpiry] = useState('');
+  const [adjustBatch, setAdjustBatch] = useState('');
 
   // Auto-resolve batches for inventory transfer
   useEffect(() => {
@@ -264,13 +266,17 @@ export const InventoryPage = () => {
     try {
       const res = await api.put(`/inventory/${selectedItemForAdjust.id}`, {
         quantity: adjustQty,
-        reason: adjustReason,
+        expiry_date: adjustExpiry || null,
+        batch_number: adjustBatch || null,
+        reason: adjustReason || 'Expiration date / stock update',
       });
       if (res.data.success) {
-        setSuccessMessage('Inventory discrepancy adjusted');
+        setSuccessMessage('Inventory details and expiration date updated successfully');
         setAdjustModalOpen(false);
         setSelectedItemForAdjust(null);
         setAdjustQty('');
+        setAdjustExpiry('');
+        setAdjustBatch('');
         setAdjustReason('');
         fetchInventory();
       }
@@ -352,6 +358,9 @@ export const InventoryPage = () => {
           onClick={() => {
             setSelectedItemForAdjust(row);
             setAdjustQty(row.quantity);
+            setAdjustBatch(row.batch_number || '');
+            setAdjustExpiry(row.expiry_date ? new Date(row.expiry_date).toISOString().split('T')[0] : '');
+            setAdjustReason('');
             setAdjustModalOpen(true);
           }}
         >
@@ -849,36 +858,58 @@ export const InventoryPage = () => {
         </form>
       </Modal>
 
-      {/* Adjust Discrepancy Modal */}
+      {/* Adjust Discrepancy & Expiration Date Modal */}
       <Modal
         isOpen={adjustModalOpen}
         onClose={() => setAdjustModalOpen(false)}
-        title={`Adjust Stock: ${selectedItemForAdjust?.product?.name}`}
+        title={`Adjust Stock & Expiration: ${selectedItemForAdjust?.product?.name}`}
         maxWidth="max-w-md"
       >
         <form onSubmit={handleAdjustStock} className="space-y-4">
-          <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">
+          <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1 border border-slate-100">
             <p><strong>Location:</strong> {selectedItemForAdjust?.location}</p>
             <p><strong>Current Quantity:</strong> {selectedItemForAdjust?.quantity}</p>
-            <p><strong>Batch:</strong> {selectedItemForAdjust?.batch_number || 'GEN'}</p>
+            <p><strong>Current Batch:</strong> {selectedItemForAdjust?.batch_number || 'None'}</p>
+            <p>
+              <strong>Current Expiry:</strong>{' '}
+              {selectedItemForAdjust?.expiry_date
+                ? new Date(selectedItemForAdjust.expiry_date).toISOString().split('T')[0]
+                : 'Not Set'}
+            </p>
           </div>
-          <Input
-            label="New Correct Quantity"
-            type="number"
-            min="0"
-            required
-            value={adjustQty}
-            onChange={(e) => setAdjustQty(e.target.value)}
-          />
-          <Input
-            label="Audit Reason"
-            required
-            placeholder="e.g. Broken bottle, inventory count mismatch"
-            value={adjustReason}
-            onChange={(e) => setAdjustReason(e.target.value)}
-          />
+
+          <div className="space-y-3">
+            <Input
+              label="Expiration Date"
+              type="date"
+              value={adjustExpiry}
+              onChange={(e) => setAdjustExpiry(e.target.value)}
+              helper="Edit, add, or change the expiration date for this stock"
+            />
+            <Input
+              label="Batch / Lot Number"
+              placeholder="e.g. BATCH-2026-01"
+              value={adjustBatch}
+              onChange={(e) => setAdjustBatch(e.target.value)}
+            />
+            <Input
+              label="New Correct Quantity"
+              type="number"
+              min="0"
+              required
+              value={adjustQty}
+              onChange={(e) => setAdjustQty(e.target.value)}
+            />
+            <Input
+              label="Audit Reason"
+              placeholder="e.g. Corrected expiration date, inventory count mismatch"
+              value={adjustReason}
+              onChange={(e) => setAdjustReason(e.target.value)}
+            />
+          </div>
+
           <Button type="submit" className="w-full py-2.5 font-semibold">
-            Save Adjustment
+            Save Changes
           </Button>
         </form>
       </Modal>

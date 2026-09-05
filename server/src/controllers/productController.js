@@ -32,7 +32,20 @@ const getProducts = async (req, res, next) => {
     const [products, total] = await Promise.all([
       prisma.product.findMany({
         where, skip, take: limit, orderBy,
-        include: { category: true },
+        include: {
+          category: true,
+          inventory: {
+            select: {
+              id: true,
+              location: true,
+              batch_number: true,
+              expiry_date: true,
+              quantity: true,
+              shelf_location: true,
+            },
+            orderBy: { expiry_date: 'asc' },
+          },
+        },
       }),
       prisma.product.count({ where }),
     ]);
@@ -111,6 +124,7 @@ const createProduct = async (req, res, next) => {
       name, name_am, generic_name, category_id, product_type,
       dosage_form, strength, brand, manufacturer, unit_price,
       reorder_level, requires_prescription, barcode, description,
+      expiry_date, batch_number, initial_quantity, initial_location,
     } = req.body;
 
     if (!name || !product_type || unit_price === undefined) {
@@ -120,16 +134,51 @@ const createProduct = async (req, res, next) => {
       });
     }
 
-    const product = await prisma.product.create({
-      data: {
-        name, name_am, generic_name, category_id, product_type,
-        dosage_form, strength, brand, manufacturer,
-        unit_price: parseFloat(unit_price),
-        reorder_level: reorder_level || 10,
-        requires_prescription: requires_prescription || false,
-        barcode, description,
-      },
-      include: { category: true },
+    const product = await prisma.$transaction(async (tx) => {
+      const prod = await tx.product.create({
+        data: {
+          name, name_am, generic_name, category_id, product_type,
+          dosage_form, strength, brand, manufacturer,
+          unit_price: parseFloat(unit_price),
+          reorder_level: reorder_level || 10,
+          requires_prescription: requires_prescription || false,
+          barcode, description,
+        },
+        include: { category: true },
+      });
+
+      // If expiry_date, batch_number, or initial quantity is specified, create initial inventory record
+      if (expiry_date || batch_number || initial_quantity !== undefined) {
+        const qty = parseInt(initial_quantity) || 0;
+        const loc = initial_location === 'DISPENSARY' ? 'DISPENSARY' : 'STORE';
+        const inv = await tx.inventory.create({
+          data: {
+            product_id: prod.id,
+            location: loc,
+            batch_number: batch_number || null,
+            expiry_date: expiry_date ? new Date(expiry_date) : null,
+            quantity: qty,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            user_id: req.user.id,
+            action: 'ADD_STOCK',
+            entity_type: 'INVENTORY',
+            entity_id: inv.id,
+            details: {
+              product_id: prod.id,
+              location: loc,
+              expiry_date: expiry_date || null,
+              batch_number: batch_number || null,
+              quantity: qty,
+            },
+          },
+        });
+      }
+
+      return prod;
     });
 
     await prisma.auditLog.create({
@@ -139,7 +188,12 @@ const createProduct = async (req, res, next) => {
       },
     });
 
-    res.status(201).json({ success: true, data: product, message: 'Product created successfully' });
+    const fullProduct = await prisma.product.findUnique({
+      where: { id: product.id },
+      include: { category: true, inventory: true },
+    });
+
+    res.status(201).json({ success: true, data: fullProduct, message: 'Product created successfully' });
   } catch (err) {
     next(err);
   }
@@ -149,26 +203,94 @@ const createProduct = async (req, res, next) => {
 const updateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updateData = { ...req.body };
+    const {
+      name, name_am, generic_name, category_id, product_type,
+      dosage_form, strength, brand, manufacturer, unit_price,
+      reorder_level, requires_prescription, barcode, description, is_active,
+      expiry_date, batch_number, inventory_id,
+    } = req.body;
 
-    if (updateData.unit_price !== undefined) {
-      updateData.unit_price = parseFloat(updateData.unit_price);
-    }
+    const product = await prisma.$transaction(async (tx) => {
+      const updateData = {};
+      if (name !== undefined) updateData.name = name;
+      if (name_am !== undefined) updateData.name_am = name_am;
+      if (generic_name !== undefined) updateData.generic_name = generic_name;
+      if (category_id !== undefined) updateData.category_id = category_id;
+      if (product_type !== undefined) updateData.product_type = product_type;
+      if (dosage_form !== undefined) updateData.dosage_form = dosage_form;
+      if (strength !== undefined) updateData.strength = strength;
+      if (brand !== undefined) updateData.brand = brand;
+      if (manufacturer !== undefined) updateData.manufacturer = manufacturer;
+      if (unit_price !== undefined) updateData.unit_price = parseFloat(unit_price);
+      if (reorder_level !== undefined) updateData.reorder_level = parseInt(reorder_level);
+      if (requires_prescription !== undefined) updateData.requires_prescription = requires_prescription;
+      if (barcode !== undefined) updateData.barcode = barcode;
+      if (description !== undefined) updateData.description = description;
+      if (is_active !== undefined) updateData.is_active = is_active;
 
-    const product = await prisma.product.update({
-      where: { id },
-      data: updateData,
-      include: { category: true },
+      const updated = await tx.product.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // Update or set expiration date and batch on inventory
+      if (expiry_date !== undefined || batch_number !== undefined) {
+        const parsedExpiry = expiry_date ? new Date(expiry_date) : null;
+        if (inventory_id) {
+          const invUpdate = {};
+          if (expiry_date !== undefined) invUpdate.expiry_date = parsedExpiry;
+          if (batch_number !== undefined) invUpdate.batch_number = batch_number || null;
+
+          await tx.inventory.update({
+            where: { id: inventory_id },
+            data: invUpdate,
+          });
+        } else {
+          // If no specific inventory_id, update the most recent inventory batch or create one
+          const existingInv = await tx.inventory.findFirst({
+            where: { product_id: id },
+            orderBy: { created_at: 'desc' },
+          });
+
+          if (existingInv) {
+            const invUpdate = {};
+            if (expiry_date !== undefined) invUpdate.expiry_date = parsedExpiry;
+            if (batch_number !== undefined) invUpdate.batch_number = batch_number || null;
+
+            await tx.inventory.update({
+              where: { id: existingInv.id },
+              data: invUpdate,
+            });
+          } else if (parsedExpiry || batch_number) {
+            await tx.inventory.create({
+              data: {
+                product_id: id,
+                location: 'STORE',
+                batch_number: batch_number || null,
+                expiry_date: parsedExpiry,
+                quantity: 0,
+              },
+            });
+          }
+        }
+      }
+
+      return updated;
     });
 
     await prisma.auditLog.create({
       data: {
         user_id: req.user.id, action: 'UPDATE', entity_type: 'PRODUCT',
-        entity_id: product.id, details: { updated_fields: Object.keys(updateData) },
+        entity_id: product.id, details: { updated_fields: Object.keys(req.body) },
       },
     });
 
-    res.json({ success: true, data: product, message: 'Product updated successfully' });
+    const fullProduct = await prisma.product.findUnique({
+      where: { id: product.id },
+      include: { category: true, inventory: true },
+    });
+
+    res.json({ success: true, data: fullProduct, message: 'Product updated successfully' });
   } catch (err) {
     next(err);
   }
@@ -260,6 +382,9 @@ const getImportTemplate = (req, res) => {
     'Reorder_Level',
     'Barcode',
     'Requires_Prescription',
+    'Expiry_Date',
+    'Batch_Number',
+    'Quantity',
     'Description',
   ];
 
@@ -278,6 +403,9 @@ const getImportTemplate = (req, res) => {
       '20',
       'MED-AMX-500',
       'true',
+      '2027-08-31',
+      'BATCH-AMX-2025',
+      '100',
       'Broad-spectrum antibiotic for bacterial infections',
     ],
     [
@@ -294,6 +422,9 @@ const getImportTemplate = (req, res) => {
       '50',
       'MED-PCM-500',
       'false',
+      '2028-01-15',
+      'BATCH-PCM-2025',
+      '250',
       'Analgesic and antipyretic for pain and fever',
     ],
     [
@@ -310,6 +441,9 @@ const getImportTemplate = (req, res) => {
       '15',
       'COS-NIV-200',
       'false',
+      '2026-12-31',
+      'BATCH-NIV-2024',
+      '30',
       'Refreshing soft moisturizing cream with Jojoba oil',
     ],
   ];
@@ -400,6 +534,31 @@ const bulkUploadProducts = async (req, res, next) => {
             description: item.description || item.Description || null,
           },
         });
+
+        // If Expiry_Date, Batch_Number or initial Quantity is specified, create initial inventory record
+        const expiryRaw = (item.expiry_date || item.Expiry_Date || '').toString().trim();
+        const batchRaw = (item.batch_number || item.Batch_Number || '').toString().trim();
+        const qtyRaw = parseInt(item.quantity || item.Quantity || item.initial_quantity) || 0;
+
+        if (expiryRaw || batchRaw || qtyRaw > 0) {
+          let parsedExpiry = null;
+          if (expiryRaw) {
+            const parsed = new Date(expiryRaw);
+            if (!isNaN(parsed.getTime())) {
+              parsedExpiry = parsed;
+            }
+          }
+
+          await prisma.inventory.create({
+            data: {
+              product_id: created.id,
+              location: 'STORE',
+              batch_number: batchRaw || null,
+              expiry_date: parsedExpiry,
+              quantity: qtyRaw,
+            },
+          });
+        }
 
         results.successCount++;
         results.created.push({ id: created.id, name: created.name });
