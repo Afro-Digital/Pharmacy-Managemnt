@@ -289,4 +289,25 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(adjustRes.body.data.expiry_date).toContain('2029-05-15');
     });
   });
+
+  describe('5. System Notifications API', () => {
+    it('Requires authentication for /api/v1/notifications', async () => {
+      const res = await request(app).get('/api/v1/notifications');
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('Returns structured notifications and category counts for logged-in user', async () => {
+      const res = await request(app)
+        .get('/api/v1/notifications')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.notifications).toBeInstanceOf(Array);
+      expect(res.body.data.counts).toBeDefined();
+      expect(typeof res.body.data.counts.total).toBe('number');
+      expect(typeof res.body.data.counts.inventory).toBe('number');
+      expect(typeof res.body.data.counts.orders).toBe('number');
+    });
+  });
 });
