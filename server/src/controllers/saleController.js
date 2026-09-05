@@ -284,12 +284,19 @@ const confirmPayment = async (req, res, next) => {
         });
       }
 
-      // Update sale status to COMPLETED and attach cashier
+      // Find active shift for this cashier if exists
+      const activeShift = await tx.workShift.findFirst({
+        where: { user_id: req.user.id, status: 'ACTIVE' },
+        orderBy: { start_time: 'desc' },
+      });
+
+      // Update sale status to COMPLETED and attach cashier and shift_id
       const completed = await tx.sale.update({
         where: { id },
         data: {
           status: 'COMPLETED',
           cashier_id: req.user.id,
+          shift_id: activeShift ? activeShift.id : null,
         },
         include: {
           items: { include: { product: true } },

@@ -6,6 +6,7 @@ const fs = require('fs');
 describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', () => {
   let adminToken;
   let pharmacistToken;
+  let cashierToken;
   let testProductId;
 
   beforeAll(async () => {
@@ -20,6 +21,12 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       .post('/api/v1/auth/login')
       .send({ username: 'pharmacist1', password: 'pharma123' });
     pharmacistToken = pharmaLogin.body.data.accessToken;
+
+    // Cashier login
+    const cashierLogin = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ username: 'cashier1', password: 'cashier123' });
+    cashierToken = cashierLogin.body.data.accessToken;
 
     // Get an existing product
     const prodRes = await request(app)
@@ -308,6 +315,125 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(typeof res.body.data.counts.total).toBe('number');
       expect(typeof res.body.data.counts.inventory).toBe('number');
       expect(typeof res.body.data.counts.orders).toBe('number');
+    });
+  });
+
+  describe('6. Shift Tracking & Isolated Cashier Reconciliations', () => {
+    let activeShiftId;
+    let shiftReconciliationId;
+
+    it('Cashier can start a new shift with opening cash drawer float', async () => {
+      const res = await request(app)
+        .post('/api/v1/shifts/start')
+        .set('Authorization', `Bearer ${cashierToken}`)
+        .send({
+          shift_name: 'Morning Cashier Shift',
+          opening_balance: 500,
+        });
+
+      expect([200, 201]).toContain(res.statusCode);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.shift_name).toBeDefined();
+      expect(Number(res.body.data.opening_balance)).toBe(500);
+      expect(res.body.data.status).toBe('ACTIVE');
+      activeShiftId = res.body.data.id;
+    });
+
+    it('Cashier can fetch their active shift and live drawer metrics', async () => {
+      const res = await request(app)
+        .get('/api/v1/shifts/current')
+        .set('Authorization', `Bearer ${cashierToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.shift).toBeDefined();
+      expect(res.body.data.shift.id).toBe(activeShiftId);
+      expect(res.body.data.metrics).toBeDefined();
+      expect(res.body.data.metrics.opening_cash).toBe(500);
+    });
+
+    it('Cashier previews reconciliation strictly scoped to their shift', async () => {
+      const res = await request(app)
+        .get(`/api/v1/reconciliation/preview?type=SHIFT&shift_id=${activeShiftId}`)
+        .set('Authorization', `Bearer ${cashierToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.reconciliation_type).toBe('SHIFT');
+      expect(Number(res.body.data.shift.opening_balance)).toBe(500);
+      expect(res.body.data.methods).toBeInstanceOf(Array);
+    });
+
+    it('Cashier can submit shift reconciliation and close out their shift drawer', async () => {
+      const preview = await request(app)
+        .get(`/api/v1/reconciliation/preview?type=SHIFT&shift_id=${activeShiftId}`)
+        .set('Authorization', `Bearer ${cashierToken}`);
+
+      const entries = preview.body.data.methods.map((b) => ({
+        payment_method_id: b.payment_method_id,
+        expected_amount: b.expected_amount,
+        actual_amount: b.expected_amount,
+        reference_numbers: b.reference_numbers || [],
+      }));
+
+      const res = await request(app)
+        .post('/api/v1/reconciliation')
+        .set('Authorization', `Bearer ${cashierToken}`)
+        .send({
+          date: new Date().toISOString().slice(0, 10),
+          reconciliation_type: 'SHIFT',
+          shift_id: activeShiftId,
+          entries,
+          notes: 'Shift drawer balanced and verified',
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.status).toBe('SUBMITTED');
+      expect(res.body.data.reconciliation_type).toBe('SHIFT');
+      shiftReconciliationId = res.body.data.id;
+    });
+
+    it('Super Admin (Owner) can view shift summary across staff members', async () => {
+      const res = await request(app)
+        .get('/api/v1/shifts/summary')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.cashier_shifts).toBeInstanceOf(Array);
+      expect(res.body.data.pharmacist_summary).toBeInstanceOf(Array);
+    });
+
+    it('Super Admin (Owner) can preview daily master reconciliation', async () => {
+      const res = await request(app)
+        .get('/api/v1/reconciliation/preview?type=DAILY')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.reconciliation_type).toBe('DAILY');
+      expect(res.body.data.daily_shifts).toBeInstanceOf(Array);
+    });
+
+    it('Non-admin cannot approve master reconciliation (403 Forbidden)', async () => {
+      const res = await request(app)
+        .post(`/api/v1/reconciliation/${shiftReconciliationId}/approve`)
+        .set('Authorization', `Bearer ${cashierToken}`)
+        .send({ action: 'APPROVED' });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('Super Admin (Owner) can approve reconciliation', async () => {
+      const res = await request(app)
+        .post(`/api/v1/reconciliation/${shiftReconciliationId}/approve`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ action: 'APPROVED', notes: 'Drawer verified by Owner' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.status).toBe('APPROVED');
     });
   });
 });

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import api from '../../services/api';
 import { useCartStore } from '../../stores/cartStore';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { ShiftBar } from '../../components/layout/ShiftBar';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -32,6 +34,7 @@ import {
 } from 'lucide-react';
 
 export const POSPage = () => {
+  const navigate = useNavigate();
   const { t } = useTranslation();
   const { user } = useAuth();
   const { pharmacyDisplayName, settings } = useTheme();
@@ -385,6 +388,9 @@ export const POSPage = () => {
           )}
         </div>
       </div>
+
+      {/* Active Shift Status & Drawer Tracker */}
+      <ShiftBar onReconcileClick={() => navigate('/reconciliation')} />
 
       {successMessage && (
         <div className="flex-shrink-0">

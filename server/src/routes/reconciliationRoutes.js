@@ -10,6 +10,6 @@ router.get('/export', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.expo
 router.get('/', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getReconciliations);
 router.get('/:id', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getReconciliation);
 router.post('/', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.createReconciliation);
-router.post('/:id/approve', requireRole(['ADMIN', 'PHARMACIST']), ctrl.approveReconciliation);
+router.post('/:id/approve', requireRole(['ADMIN']), ctrl.approveReconciliation);
 
 module.exports = router;

@@ -5,6 +5,7 @@ import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { NotificationProvider } from './context/NotificationContext';
+import { ShiftProvider } from './context/ShiftContext';
 import './i18n';
 import './index.css';
 
@@ -14,7 +15,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <AuthProvider>
         <ThemeProvider>
           <NotificationProvider>
-            <App />
+            <ShiftProvider>
+              <App />
+            </ShiftProvider>
           </NotificationProvider>
         </ThemeProvider>
       </AuthProvider>
