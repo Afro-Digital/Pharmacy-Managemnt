@@ -39,7 +39,7 @@ export const Header = ({ onToggleSidebar }) => {
   };
 
   return (
-    <header className="flex items-center justify-between px-6 sm:px-8 py-5 bg-white border-b border-slate-100">
+    <header className="flex items-center justify-between px-5 sm:px-7 py-3 sm:py-3.5 bg-white border-b border-slate-100 flex-shrink-0">
       {/* Left Title Area from SellMate */}
       <div className="flex items-center space-x-3">
         <button

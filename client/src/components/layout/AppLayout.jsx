@@ -8,16 +8,16 @@ export const AppLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[#F4F5FA] p-2 sm:p-4 lg:p-5 flex flex-col justify-center">
-      {/* Outer rounded container card mimicking the SellMate design */}
-      <div className="flex-1 flex bg-white rounded-[24px] sm:rounded-[32px] shadow-[0_15px_50px_-15px_rgba(0,0,0,0.05)] border border-slate-100 overflow-hidden min-h-[calc(100vh-2rem)]">
+    <div className="h-screen w-screen bg-[#F4F5FA] p-2 sm:p-3 lg:p-4 flex flex-col justify-center items-center overflow-hidden">
+      {/* Outer rounded container card mimicking the SellMate design, centered and fitting screen */}
+      <div className="w-full max-w-[1600px] h-full flex bg-white rounded-[20px] sm:rounded-[28px] shadow-[0_15px_50px_-15px_rgba(0,0,0,0.05)] border border-slate-100 overflow-hidden">
         {/* Left Sidebar */}
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
         {/* Right Main Content Area */}
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden bg-white">
+        <div className="flex flex-col flex-1 min-w-0 h-full overflow-hidden bg-white">
           <Header onToggleSidebar={() => setSidebarOpen((prev) => !prev)} />
-          <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-[#FAFAFC] pb-24 lg:pb-8">
+          <main className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 lg:p-5 bg-[#FAFAFC] flex flex-col">
             <Outlet />
           </main>
           <MobileNav />

@@ -333,15 +333,15 @@ export const POSPage = () => {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex-1 min-h-0 h-full flex flex-col space-y-3 overflow-hidden">
       {/* Top Bar with Mode Indicator & Admin Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-3xl border border-slate-100 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.02)]">
+      <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white px-4 py-3 rounded-2xl border border-slate-100 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.02)]">
         <div className="flex items-center space-x-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-[#4336D6] to-[#5345E6] flex items-center justify-center text-white font-bold shadow-md shadow-indigo-100">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#4336D6] to-[#5345E6] flex items-center justify-center text-white font-bold shadow-md shadow-indigo-100 flex-shrink-0">
             <ShoppingBag className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-lg font-extrabold text-slate-900 tracking-tight">
+            <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
               {t('pos.title')}
             </h2>
             <span className="text-xs text-slate-400 font-medium">
@@ -387,24 +387,28 @@ export const POSPage = () => {
       </div>
 
       {successMessage && (
-        <Alert variant="success" onClose={() => setSuccessMessage(null)}>
-          {successMessage}
-        </Alert>
+        <div className="flex-shrink-0">
+          <Alert variant="success" onClose={() => setSuccessMessage(null)}>
+            {successMessage}
+          </Alert>
+        </div>
       )}
 
       {errorMessage && (
-        <Alert variant="error" onClose={() => setErrorMessage(null)}>
-          {errorMessage}
-        </Alert>
+        <div className="flex-shrink-0">
+          <Alert variant="error" onClose={() => setErrorMessage(null)}>
+            {errorMessage}
+          </Alert>
+        </div>
       )}
 
       {/* ========================================================================= */}
       {/* PHARMACIST WORKFLOW: Select Products, Configure & Approve Sale           */}
       {/* ========================================================================= */}
       {activeMode === 'PHARMACIST' && (
-        <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-14rem)]">
+        <div className="flex-1 min-h-0 w-full flex flex-col lg:flex-row gap-4 overflow-hidden">
           {/* Left Column: Product Search & Dispensary Grid */}
-          <div className="flex-1 flex flex-col space-y-3 min-w-0">
+          <div className="flex-1 min-h-0 flex flex-col space-y-3 min-w-0 overflow-hidden">
             {/* Search Input */}
             <div className="relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -459,7 +463,7 @@ export const POSPage = () => {
             )}
 
             {/* Dispensary Grid */}
-            <div className="flex-1 bg-white rounded-2xl border border-slate-200/80 p-4 overflow-y-auto">
+            <div className="flex-1 min-h-0 bg-white rounded-2xl border border-slate-200/80 p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Dispensary Inventory Available for Approval ({dispensaryInventory.length})
@@ -500,8 +504,8 @@ export const POSPage = () => {
           </div>
 
           {/* Right Column: Pharmacist Order Assembly Cart */}
-          <div className="w-full lg:w-96 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-4 bg-slate-50/80 border-b border-slate-200 space-y-2.5">
+          <div className="w-full lg:w-[380px] xl:w-[400px] h-full flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-shrink-0">
+            <div className="p-4 bg-slate-50/80 border-b border-slate-200 space-y-2.5 flex-shrink-0">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-slate-900 text-sm flex items-center">
                   {t('pos.cart')} ({items.length})
@@ -545,7 +549,7 @@ export const POSPage = () => {
             </div>
 
             {/* Cart Items List */}
-            <div className="flex-1 p-4 overflow-y-auto divide-y divide-slate-100">
+            <div className="flex-1 min-h-0 p-4 overflow-y-auto divide-y divide-slate-100">
               {items.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 py-12">
                   <ShoppingBag className="w-10 h-10 mb-2 stroke-1 text-slate-300" />
@@ -599,7 +603,7 @@ export const POSPage = () => {
             </div>
 
             {/* Pharmacist Action Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-2.5">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-2.5 flex-shrink-0">
               <div className="flex justify-between text-xs text-slate-500">
                 <span>{t('pos.subtotal')}</span>
                 <span className="font-semibold text-slate-800">{getSubtotal().toFixed(2)} ETB</span>
@@ -660,9 +664,9 @@ export const POSPage = () => {
         const canConfirm = selectedPendingOrder && isExactMatch && !hasDuplicateMethod && !hasInvalidRow;
 
         return (
-          <div className="max-w-6xl mx-auto w-full flex flex-col lg:flex-row gap-5 h-[calc(100vh-9.5rem)]">
+          <div className="flex-1 min-h-0 w-full flex flex-col lg:flex-row gap-4 overflow-hidden">
             {/* Left Column: Pending Orders Queue */}
-            <div className="flex-1 flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm p-5 min-w-0 overflow-hidden">
+            <div className="flex-1 min-h-0 h-full flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm p-4 sm:p-5 min-w-0 overflow-hidden">
               <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-3 flex-shrink-0">
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900 flex items-center">
@@ -676,7 +680,7 @@ export const POSPage = () => {
                 <Badge variant="warning">{t('pos.awaiting_payment')}</Badge>
               </div>
 
-              <div className="flex-1 overflow-y-auto divide-y divide-slate-100 pr-1">
+              <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 pr-1">
                 {pendingOrders.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 py-16">
                     <Clock className="w-12 h-12 mb-3 stroke-1 text-slate-300 animate-pulse" />
@@ -731,7 +735,7 @@ export const POSPage = () => {
             </div>
 
             {/* Right Column: Read-Only Order Review & Cashier Split Payment Form */}
-            <div className="w-full lg:w-[450px] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex-shrink-0">
+            <div className="w-full lg:w-[440px] xl:w-[460px] h-full flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex-shrink-0">
               {!selectedPendingOrder ? (
                 <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-8">
                   <CreditCard className="w-12 h-12 mb-3 stroke-1 text-slate-300" />
@@ -743,7 +747,7 @@ export const POSPage = () => {
               ) : (
                 <>
                   {/* Pinned Top: Order Header */}
-                  <div className="p-3.5 bg-slate-50/80 border-b border-slate-100 flex-shrink-0">
+                  <div className="p-3 bg-slate-50/80 border-b border-slate-100 flex-shrink-0">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-mono font-bold text-slate-900">
@@ -764,7 +768,7 @@ export const POSPage = () => {
                   </div>
 
                   {/* Compact Read-Only Items List */}
-                  <div className="px-3.5 py-2 border-b border-slate-100 max-h-28 overflow-y-auto space-y-1 bg-white flex-shrink-0">
+                  <div className="px-3 py-2 border-b border-slate-100 max-h-24 overflow-y-auto space-y-1 bg-white flex-shrink-0">
                     {selectedPendingOrder.items?.map((item, i) => (
                       <div key={i} className="flex justify-between items-center text-xs">
                         <div className="truncate pr-2">
@@ -779,11 +783,11 @@ export const POSPage = () => {
                   </div>
 
                   {/* Price & Balance Countdown Banner */}
-                  <div className="p-3.5 bg-[#F8F9FD] border-b border-slate-100 flex-shrink-0 space-y-2">
+                  <div className="p-3 bg-[#F8F9FD] border-b border-slate-100 flex-shrink-0 space-y-1.5">
                     <div className="flex justify-between items-center">
                       <div>
                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Due</span>
-                        <span className="text-xl font-black text-slate-900">
+                        <span className="text-lg font-black text-slate-900">
                           {totalDue.toFixed(2)} ETB
                         </span>
                       </div>
@@ -799,16 +803,16 @@ export const POSPage = () => {
                     <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 text-xs">
                       <span className="font-medium text-slate-500">Balance Status:</span>
                       {isExactMatch ? (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">
                           <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-600" />
                           Exact Match ({totalDue.toFixed(2)} ETB)
                         </span>
                       ) : isUnderpaid ? (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">
                           Remaining: {remainingBalance.toFixed(2)} ETB
                         </span>
                       ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-700">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700">
                           Exceeds by {(totalPaid - totalDue).toFixed(2)} ETB
                         </span>
                       )}
@@ -817,16 +821,16 @@ export const POSPage = () => {
 
                   {/* Real-time Warning Alerts */}
                   {hasDuplicateMethod && (
-                    <div className="mx-3.5 mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2 flex-shrink-0">
+                    <div className="mx-3 mt-2 p-2 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2 flex-shrink-0">
                       <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
                       <span>
-                        <strong>Duplicate Payment Method:</strong> Each split payment must use a distinct method (e.g. Cash + Telebirr, not Cash twice).
+                        <strong>Duplicate Payment Method:</strong> Each split payment must use a distinct method.
                       </span>
                     </div>
                   )}
 
                   {isOverpaid && (
-                    <div className="mx-3.5 mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2 flex-shrink-0">
+                    <div className="mx-3 mt-2 p-2 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start space-x-2 flex-shrink-0">
                       <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
                       <span>
                         <strong>Amount Exceeds Total:</strong> The entered split amounts exceed the required total by {(totalPaid - totalDue).toFixed(2)} ETB.
@@ -835,7 +839,7 @@ export const POSPage = () => {
                   )}
 
                   {/* Middle Scrollable: Split Payment Rows */}
-                  <div className="flex-1 p-3.5 overflow-y-auto space-y-2.5">
+                  <div className="flex-1 min-h-0 p-3 overflow-y-auto space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
                         {t('pos.payment_breakdown')} ({cashierPayments.length})

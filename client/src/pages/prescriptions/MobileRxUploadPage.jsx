@@ -64,7 +64,7 @@ export const MobileRxUploadPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-slate-900 text-white flex flex-col items-center justify-between p-4 sm:p-6 font-sans">
+    <div className="h-screen w-screen overflow-y-auto bg-gradient-to-b from-slate-900 via-blue-950 to-slate-900 text-white flex flex-col items-center justify-between p-4 sm:p-6 font-sans">
       {/* Top Header */}
       <header className="w-full max-w-md text-center py-4">
         <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-blue-600 text-white shadow-lg mb-2">

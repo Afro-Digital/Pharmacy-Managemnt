@@ -52,7 +52,7 @@ export const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-4 bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900">
+    <div className="h-screen w-screen overflow-y-auto flex flex-col justify-center items-center p-4 bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900">
       {/* Top language toggle */}
       <div className="absolute top-6 right-6 flex bg-slate-800/80 backdrop-blur-xs border border-slate-700/60 p-1 rounded-xl">
         <button

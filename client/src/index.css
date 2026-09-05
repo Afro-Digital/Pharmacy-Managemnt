@@ -15,7 +15,12 @@
 }
 
 @layer base {
-  html {
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   }
 
