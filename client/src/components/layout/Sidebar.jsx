@@ -11,6 +11,7 @@ import {
   FileText,
   Users,
   BarChart3,
+  Scale,
   Settings,
   ShieldCheck,
   LogOut,
@@ -72,6 +73,12 @@ export const Sidebar = ({ isOpen, onClose }) => {
       label: t('nav.reports'),
       path: '/reports',
       icon: BarChart3,
+      roles: ['ADMIN', 'PHARMACIST'],
+    },
+    {
+      label: 'Reconciliation',
+      path: '/reconciliation',
+      icon: Scale,
       roles: ['ADMIN', 'PHARMACIST'],
     },
     {

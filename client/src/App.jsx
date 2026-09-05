@@ -14,6 +14,7 @@ import { SettingsPage } from './pages/settings/SettingsPage';
 import { UsersPage } from './pages/users/UsersPage';
 import { MobileRxUploadPage } from './pages/prescriptions/MobileRxUploadPage';
 import { OrdersPage } from './pages/orders/OrdersPage';
+import { ReconciliationPage } from './pages/reconciliation/ReconciliationPage';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -91,6 +92,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['ADMIN', 'PHARMACIST']}>
               <ReportsPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="reconciliation"
+          element={
+            <RoleRoute allowedRoles={['ADMIN', 'PHARMACIST']}>
+              <ReconciliationPage />
             </RoleRoute>
           }
         />

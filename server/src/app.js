@@ -18,6 +18,7 @@ const paymentMethodRoutes = require('./routes/paymentMethodRoutes');
 const patientRoutes = require('./routes/patientRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
+const reconciliationRoutes = require('./routes/reconciliationRoutes');
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use('/api/v1/payment-methods', paymentMethodRoutes);
 app.use('/api/v1/patients', patientRoutes);
 app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/settings', settingsRoutes);
+app.use('/api/v1/reconciliation', reconciliationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
