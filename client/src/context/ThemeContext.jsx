@@ -8,6 +8,34 @@ export const ThemeProvider = ({ children }) => {
   const { i18n } = useTranslation();
   const [settings, setSettings] = useState(null);
   const [currentLang, setCurrentLang] = useState(i18n.language || 'en');
+  const [themeMode, setThemeModeState] = useState(() => {
+    const saved = localStorage.getItem('tilex_theme');
+    // Default is strictly 'light' (white) unless the user explicitly chose 'dark'
+    if (saved === 'dark') return 'dark';
+    return 'light';
+  });
+
+  // Sync dark class with document element
+  useEffect(() => {
+    if (themeMode === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.body.classList.remove('dark');
+    }
+    localStorage.setItem('tilex_theme', themeMode);
+  }, [themeMode]);
+
+  const toggleThemeMode = () => {
+    setThemeModeState((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  const setThemeMode = (mode) => {
+    if (mode === 'dark' || mode === 'light') {
+      setThemeModeState(mode);
+    }
+  };
 
   const applyColors = (primary, secondary) => {
     if (primary) {
@@ -57,6 +85,10 @@ export const ThemeProvider = ({ children }) => {
       changeLanguage,
       pharmacyDisplayName,
       refreshSettings: fetchSettings,
+      themeMode,
+      isDark: themeMode === 'dark',
+      toggleThemeMode,
+      setThemeMode,
     }}>
       {children}
     </ThemeContext.Provider>

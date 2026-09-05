@@ -108,7 +108,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
 
       {/* Sidebar Drawer */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-40 w-64 bg-white border-r border-slate-100 flex flex-col justify-between p-5 transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static h-full overflow-hidden ${
+        className={`fixed top-0 bottom-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 border-r border-slate-100 dark:border-slate-800 flex flex-col justify-between p-5 transition-all duration-200 ease-in-out lg:translate-x-0 lg:static h-full overflow-hidden ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -116,22 +116,22 @@ export const Sidebar = ({ isOpen, onClose }) => {
           {/* Brand Header */}
           <div className="flex items-center justify-between flex-shrink-0">
             <div className="flex items-center space-x-3">
-              {/* Vibrant Gradient Logo Icon from the reference */}
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#4336D6] via-[#5345E6] to-[#7C3AED] flex items-center justify-center text-white shadow-md shadow-indigo-200">
+              {/* Vibrant Gradient Logo Icon */}
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#4336D6] via-[#5345E6] to-[#7C3AED] flex items-center justify-center text-white shadow-md shadow-indigo-200 dark:shadow-none">
                 <TrendingUp className="w-5 h-5" />
               </div>
               <div>
-                <span className="text-xl font-extrabold text-slate-900 tracking-tight">
+                <span className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">
                   Tilex<span className="text-[#5345E6]">.</span>
                 </span>
-                <span className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 -mt-1">
+                <span className="block text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 -mt-1">
                   Pharmacy
                 </span>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 lg:hidden"
+              className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
             >
               <X className="w-5 h-5" />
             </button>
@@ -150,8 +150,8 @@ export const Sidebar = ({ isOpen, onClose }) => {
                   className={({ isActive }) =>
                     `flex items-center px-4 py-3 rounded-2xl text-sm transition-all duration-150 group ${
                       isActive
-                        ? 'bg-[#F0EEFA] text-[#5345E6] font-bold shadow-xs'
-                        : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50 font-medium'
+                        ? 'bg-[#F0EEFA] dark:bg-indigo-950/60 text-[#5345E6] dark:text-indigo-400 font-bold shadow-xs'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/60 font-medium'
                     }`
                   }
                 >
@@ -164,7 +164,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
         </div>
 
         {/* Bottom Actions (Settings & Log Out) */}
-        <div className="pt-3 border-t border-slate-100 space-y-1 flex-shrink-0">
+        <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1 flex-shrink-0">
           {user?.role === 'ADMIN' && (
             <NavLink
               to="/settings"
@@ -172,8 +172,8 @@ export const Sidebar = ({ isOpen, onClose }) => {
               className={({ isActive }) =>
                 `flex items-center px-4 py-3 rounded-2xl text-sm transition-all duration-150 ${
                   isActive
-                    ? 'bg-[#F0EEFA] text-[#5345E6] font-bold'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50 font-medium'
+                    ? 'bg-[#F0EEFA] dark:bg-indigo-950/60 text-[#5345E6] dark:text-indigo-400 font-bold'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/60 font-medium'
                 }`
               }
             >
@@ -184,7 +184,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
 
           <button
             onClick={handleLogout}
-            className="w-full flex items-center px-4 py-3 rounded-2xl text-sm font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50/70 transition-all duration-150 text-left"
+            className="w-full flex items-center px-4 py-3 rounded-2xl text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/30 transition-all duration-150 text-left"
           >
             <LogOut className="w-5 h-5 mr-3.5 text-slate-400" />
             <span>{t('auth.logout')}</span>

@@ -18,19 +18,19 @@ export const Select = forwardRef(({
   return (
     <div className="w-full">
       {label && (
-        <label htmlFor={selectId} className="block text-xs font-bold text-slate-700 mb-1.5">
+        <label htmlFor={selectId} className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
           {label} {required && <span className="text-rose-500">*</span>}
         </label>
       )}
       <select
         ref={ref}
         id={selectId}
-        className={`w-full px-4 py-2.5 text-sm bg-white border transition-all focus:outline-none focus:ring-3 focus:ring-[#5345E6]/10 focus:border-[#5345E6] ${
+        className={`w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-900 border transition-all focus:outline-none focus:ring-3 focus:ring-[#5345E6]/10 focus:border-[#5345E6] text-slate-800 dark:text-slate-100 ${
           pill ? 'rounded-full' : 'rounded-xl'
         } ${
           error
-            ? 'border-rose-300 bg-rose-50/20 focus:border-rose-500 focus:ring-rose-500/10'
-            : 'border-slate-200 hover:border-slate-300 text-slate-800'
+            ? 'border-rose-300 dark:border-rose-500/50 bg-rose-50/20 dark:bg-rose-950/20 focus:border-rose-500 focus:ring-rose-500/10'
+            : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
         } ${className}`}
         {...props}
       >

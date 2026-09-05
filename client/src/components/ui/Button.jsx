@@ -25,13 +25,13 @@ export const Button = ({
     primary:
       'bg-[#5345E6] hover:bg-[#4336D6] text-white focus:ring-[#5345E6] shadow-xs hover:shadow-sm',
     secondary:
-      'bg-[#F0EEFA] hover:bg-[#E5E1F8] text-[#5345E6] focus:ring-[#5345E6]',
+      'bg-[#F0EEFA] dark:bg-indigo-950/60 hover:bg-[#E5E1F8] dark:hover:bg-indigo-900/60 text-[#5345E6] dark:text-indigo-400 focus:ring-[#5345E6]',
     outline:
-      'border border-slate-200/90 bg-white hover:bg-slate-50 text-slate-700 focus:ring-[#5345E6]',
+      'border border-slate-200/90 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 focus:ring-[#5345E6]',
     danger:
       'bg-rose-600 hover:bg-rose-700 text-white focus:ring-rose-500 shadow-xs',
     ghost:
-      'hover:bg-slate-100 text-slate-700 focus:ring-slate-400',
+      'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 focus:ring-slate-400',
     accent:
       'bg-[#10B981] hover:bg-[#059669] text-white focus:ring-[#10B981] shadow-xs',
   };

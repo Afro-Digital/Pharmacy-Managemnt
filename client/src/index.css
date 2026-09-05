@@ -14,6 +14,13 @@
   --color-surface: #FFFFFF;
 }
 
+.dark {
+  --color-canvas: #0B0F19;
+  --color-primary-light: rgba(83, 69, 230, 0.15);
+  --color-surface: #111827;
+  color-scheme: dark;
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
@@ -28,6 +35,11 @@
     background-color: var(--color-canvas);
     color: #111827;
     -webkit-font-smoothing: antialiased;
+  }
+
+  body.dark, html.dark body {
+    background-color: #0B0F19;
+    color: #F1F5F9;
   }
 }
 
