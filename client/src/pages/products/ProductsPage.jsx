@@ -260,8 +260,22 @@ export const ProductsPage = () => {
     reader.readAsText(file);
   };
 
-  const handleDownloadTemplate = () => {
-    window.open(`${API_BASE}/products/import-template`, '_blank');
+  const handleDownloadTemplate = async () => {
+    try {
+      const response = await api.get('/products/import-template', { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', 'product_import_template.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      console.error('Blob download failed, falling back to direct link', err);
+      window.open(`${API_BASE}/products/import-template`, '_blank');
+    }
   };
 
   const handleExecuteBulkImport = async () => {

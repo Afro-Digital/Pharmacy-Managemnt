@@ -3,11 +3,13 @@ const { authenticate } = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
 const ctrl = require('../controllers/productController');
 
+// Standard CSV template download (public, no confidential data)
+router.get('/import-template', ctrl.getImportTemplate);
+
 router.use(authenticate);
 
 // Specific sub-paths before parameterized paths
 router.get('/search', ctrl.searchProducts);
-router.get('/import-template', ctrl.getImportTemplate);
 router.post('/bulk-upload', requireRole(['ADMIN']), ctrl.bulkUploadProducts);
 router.get('/low-stock', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getLowStock);
 router.get('/expiring', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getExpiring);
