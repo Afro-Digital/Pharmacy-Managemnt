@@ -11,6 +11,7 @@ import { Alert } from '../../components/ui/Alert';
 import { useAuth } from '../../context/AuthContext';
 import {
   Boxes,
+  Package,
   ArrowRightLeft,
   Plus,
   Edit,
