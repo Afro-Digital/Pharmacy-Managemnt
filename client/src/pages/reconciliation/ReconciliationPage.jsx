@@ -42,6 +42,7 @@ export const ReconciliationPage = () => {
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
+  const canApprove = ['ADMIN', 'PHARMACIST'].includes(user?.role);
 
   const [activeTab, setActiveTab] = useState('NEW'); // 'NEW' | 'HISTORY'
 
@@ -134,7 +135,7 @@ export const ReconciliationPage = () => {
   };
 
   const handleSubmitReconciliation = async () => {
-    if (!preview || !isAdmin) return;
+    if (!preview) return;
 
     const entries = preview.methods.map((m) => {
       const actual = parseFloat(entryValues[m.payment_method_id]?.actual) || 0;
@@ -285,7 +286,7 @@ export const ReconciliationPage = () => {
           </p>
         </div>
 
-        {activeTab === 'HISTORY' && isAdmin && (
+        {activeTab === 'HISTORY' && (
           <Button variant="outline" size="sm" onClick={handleExportCSV} className="text-xs">
             <Download className="w-3.5 h-3.5 mr-1.5" /> Export CSV
           </Button>
@@ -470,7 +471,7 @@ export const ReconciliationPage = () => {
                                   updateEntryValue(method.payment_method_id, 'actual', e.target.value)
                                 }
                                 placeholder="0.00"
-                                disabled={!isAdmin}
+                                disabled={preview.already_reconciled}
                               />
                             </div>
 
@@ -578,7 +579,7 @@ export const ReconciliationPage = () => {
                 </div>
 
                 {/* Submit Footer */}
-                {isAdmin && (
+                {!preview.already_reconciled && (
                   <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3">
                     <Input
                       placeholder="Overall reconciliation notes (optional)..."
@@ -719,7 +720,7 @@ export const ReconciliationPage = () => {
                     >
                       <Eye className="w-3.5 h-3.5" />
                     </button>
-                    {isAdmin && row.status === 'SUBMITTED' && (
+                    {canApprove && row.status === 'SUBMITTED' && (
                       <button
                         type="button"
                         onClick={() => {

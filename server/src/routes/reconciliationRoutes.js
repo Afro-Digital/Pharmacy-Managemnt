@@ -5,11 +5,11 @@ const ctrl = require('../controllers/reconciliationController');
 
 router.use(authenticate);
 
-router.get('/preview', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getReconciliationPreview);
-router.get('/export', requireRole(['ADMIN']), ctrl.exportReconciliation);
-router.get('/', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getReconciliations);
-router.get('/:id', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getReconciliation);
-router.post('/', requireRole(['ADMIN']), ctrl.createReconciliation);
-router.post('/:id/approve', requireRole(['ADMIN']), ctrl.approveReconciliation);
+router.get('/preview', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getReconciliationPreview);
+router.get('/export', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.exportReconciliation);
+router.get('/', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getReconciliations);
+router.get('/:id', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getReconciliation);
+router.post('/', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.createReconciliation);
+router.post('/:id/approve', requireRole(['ADMIN', 'PHARMACIST']), ctrl.approveReconciliation);
 
 module.exports = router;

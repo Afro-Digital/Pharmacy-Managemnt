@@ -95,14 +95,7 @@ export default function App() {
             </RoleRoute>
           }
         />
-        <Route
-          path="reconciliation"
-          element={
-            <RoleRoute allowedRoles={['ADMIN', 'PHARMACIST']}>
-              <ReconciliationPage />
-            </RoleRoute>
-          }
-        />
+        <Route path="reconciliation" element={<ReconciliationPage />} />
         <Route
           path="settings"
           element={

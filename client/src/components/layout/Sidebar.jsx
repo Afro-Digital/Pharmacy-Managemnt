@@ -79,7 +79,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
       label: 'Reconciliation',
       path: '/reconciliation',
       icon: Scale,
-      roles: ['ADMIN', 'PHARMACIST'],
+      roles: ['ADMIN', 'PHARMACIST', 'CASHIER'],
     },
     {
       label: t('nav.users'),
