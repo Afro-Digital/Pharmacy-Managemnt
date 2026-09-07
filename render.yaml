@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: tilexpharmacy-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install && npx prisma generate && npx prisma db push --accept-data-loss
+    startCommand: node src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production

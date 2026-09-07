@@ -323,6 +323,12 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
     let shiftReconciliationId;
 
     it('Cashier can start a new shift with opening cash drawer float', async () => {
+      // Ensure clean state: end any existing active shift
+      await request(app)
+        .post('/api/v1/shifts/end')
+        .set('Authorization', `Bearer ${cashierToken}`)
+        .send({ notes: 'Cleanup for test' });
+
       const res = await request(app)
         .post('/api/v1/shifts/start')
         .set('Authorization', `Bearer ${cashierToken}`)

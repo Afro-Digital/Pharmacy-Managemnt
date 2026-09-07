@@ -4,6 +4,9 @@
   "description": "TilexPharmacy — Pharmacy & Cosmetics Management System",
   "private": true,
   "scripts": {
+    "start": "cd server && npm start",
+    "build": "cd server && npm install && npm run build",
+    "postinstall": "cd server && npm install",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
@@ -11,7 +14,7 @@
     "db:migrate": "cd server && npx prisma migrate dev",
     "db:seed": "cd server && npx prisma db seed",
     "db:reset": "cd server && npx prisma migrate reset --force",
-    "build": "cd client && npm run build"
+    "build:client": "cd client && npm run build"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
