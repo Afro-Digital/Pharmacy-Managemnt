@@ -11,8 +11,8 @@ router.use(authenticate);
 // Specific sub-paths before parameterized paths
 router.get('/search', ctrl.searchProducts);
 router.post('/bulk-upload', requireRole(['ADMIN']), ctrl.bulkUploadProducts);
-router.get('/low-stock', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getLowStock);
-router.get('/expiring', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getExpiring);
+router.get('/low-stock', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getLowStock);
+router.get('/expiring', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getExpiring);
 
 router.get('/', ctrl.getProducts);
 router.post('/', requireRole(['ADMIN']), ctrl.createProduct);
