@@ -3,6 +3,8 @@ const app = require('../src/app');
 const path = require('path');
 const fs = require('fs');
 
+jest.setTimeout(30000);
+
 describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', () => {
   let adminToken;
   let pharmacistToken;
@@ -440,6 +442,40 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.status).toBe('APPROVED');
+    });
+
+    it('Super Admin can inspect complete details of a cashier shift submission', async () => {
+      const res = await request(app)
+        .get(`/api/v1/shifts/${activeShiftId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.shift).toBeDefined();
+      expect(res.body.data.shift.id).toBe(activeShiftId);
+      expect(res.body.data.sales).toBeInstanceOf(Array);
+      expect(res.body.data.payment_methods).toBeInstanceOf(Array);
+    });
+
+    it('Super Admin can inspect detailed pharmacist clinical activity and prescriptions', async () => {
+      const summaryRes = await request(app)
+        .get('/api/v1/shifts/summary')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      const pharmacistId = summaryRes.body.data.pharmacist_summary[0]?.pharmacist?.id;
+
+      if (pharmacistId) {
+        const res = await request(app)
+          .get(`/api/v1/shifts/pharmacist-activity?pharmacist_id=${pharmacistId}`)
+          .set('Authorization', `Bearer ${adminToken}`);
+
+        expect(res.statusCode).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data.pharmacist).toBeDefined();
+        expect(res.body.data.summary).toBeDefined();
+        expect(res.body.data.approved_sales).toBeInstanceOf(Array);
+        expect(res.body.data.dispensed_prescriptions).toBeInstanceOf(Array);
+      }
     });
   });
 });

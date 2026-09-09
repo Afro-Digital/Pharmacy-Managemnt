@@ -10,6 +10,8 @@ router.get('/current', ctrl.getCurrentShift);
 router.post('/start', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.startShift);
 router.post('/end', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.endShift);
 router.get('/summary', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getShiftSummary);
+router.get('/pharmacist-activity', requireRole(['ADMIN', 'PHARMACIST']), ctrl.getPharmacistActivity);
+router.get('/:id', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getShiftDetails);
 router.get('/', requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']), ctrl.getShifts);
 
 module.exports = router;

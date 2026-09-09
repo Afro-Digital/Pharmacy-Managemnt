@@ -417,10 +417,207 @@ const getShiftSummary = async (req, res, next) => {
   }
 };
 
+// GET /api/v1/shifts/pharmacist-activity?pharmacist_id=...&date=...
+const getPharmacistActivity = async (req, res, next) => {
+  try {
+    const { pharmacist_id, date } = req.query;
+    if (!pharmacist_id) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION', message: 'pharmacist_id is required' },
+      });
+    }
+
+    const dateStr = date || new Date().toISOString().slice(0, 10);
+    const startOfDay = new Date(dateStr + 'T00:00:00.000Z');
+    const endOfDay = new Date(dateStr + 'T23:59:59.999Z');
+
+    const pharmacist = await prisma.user.findUnique({
+      where: { id: pharmacist_id },
+      select: { id: true, full_name: true, username: true, role: true, phone: true },
+    });
+
+    if (!pharmacist) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Pharmacist not found' },
+      });
+    }
+
+    const approvedSales = await prisma.sale.findMany({
+      where: {
+        pharmacist_id,
+        created_at: { gte: startOfDay, lte: endOfDay },
+      },
+      include: {
+        items: {
+          include: {
+            product: { select: { id: true, name: true, name_am: true, dosage_form: true, strength: true, barcode: true } },
+          },
+        },
+        cashier: { select: { id: true, full_name: true } },
+        patient: { select: { id: true, full_name: true, phone: true } },
+        prescription: { select: { id: true, prescription_no: true, prescribed_by: true, notes: true } },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    const dispensedPrescriptions = await prisma.prescription.findMany({
+      where: {
+        dispensed_by: pharmacist_id,
+        updated_at: { gte: startOfDay, lte: endOfDay },
+        status: 'DISPENSED',
+      },
+      include: {
+        patient: true,
+        items: {
+          include: {
+            product: { select: { id: true, name: true, name_am: true, dosage_form: true, strength: true, barcode: true } },
+          },
+        },
+      },
+      orderBy: { updated_at: 'desc' },
+    });
+
+    const shifts = await prisma.workShift.findMany({
+      where: {
+        user_id: pharmacist_id,
+        start_time: { gte: startOfDay, lte: endOfDay },
+      },
+      orderBy: { start_time: 'asc' },
+    });
+
+    const totalVolume = approvedSales.reduce((s, sale) => s + parseFloat(sale.total_amount || 0), 0);
+    const totalUnits = approvedSales.reduce(
+      (s, sale) => s + sale.items.reduce((iSum, item) => iSum + item.quantity, 0),
+      0
+    );
+
+    res.json({
+      success: true,
+      data: {
+        pharmacist,
+        date: dateStr,
+        shifts,
+        summary: {
+          sales_approved_count: approvedSales.length,
+          total_volume: parseFloat(totalVolume.toFixed(2)),
+          units_dispensed: totalUnits,
+          prescriptions_dispensed_count: dispensedPrescriptions.length,
+        },
+        approved_sales: approvedSales,
+        dispensed_prescriptions: dispensedPrescriptions,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/v1/shifts/:id
+const getShiftDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const shift = await prisma.workShift.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, full_name: true, username: true, role: true, phone: true } },
+        reconciliations: {
+          include: {
+            creator: { select: { id: true, full_name: true } },
+            approver: { select: { id: true, full_name: true } },
+            entries: {
+              include: { payment_method: true },
+              orderBy: { payment_method: { sort_order: 'asc' } },
+            },
+          },
+        },
+      },
+    });
+
+    if (!shift) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Shift not found' },
+      });
+    }
+
+    const endTime = shift.end_time || new Date();
+    const sales = await prisma.sale.findMany({
+      where: {
+        OR: [
+          { shift_id: shift.id },
+          { cashier_id: shift.user_id, created_at: { gte: shift.start_time, lte: endTime } },
+        ],
+        status: 'COMPLETED',
+      },
+      include: {
+        items: {
+          include: {
+            product: { select: { id: true, name: true, name_am: true, dosage_form: true, strength: true, barcode: true } },
+          },
+        },
+        payments: {
+          include: { payment_method: true },
+        },
+        pharmacist: { select: { id: true, full_name: true } },
+        patient: { select: { id: true, full_name: true } },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
+    const paymentMethodMap = {};
+    let totalCollected = 0;
+
+    for (const sale of sales) {
+      for (const p of sale.payments) {
+        const mid = p.payment_method_id;
+        const amount = parseFloat(p.amount) || 0;
+        totalCollected += amount;
+
+        if (!paymentMethodMap[mid]) {
+          paymentMethodMap[mid] = {
+            method_id: mid,
+            method_name: p.payment_method?.name || 'Unknown',
+            method_code: p.payment_method?.code || 'UNKNOWN',
+            amount: 0,
+            transaction_count: 0,
+            reference_numbers: [],
+          };
+        }
+        paymentMethodMap[mid].amount += amount;
+        paymentMethodMap[mid].transaction_count += 1;
+        if (p.reference_number) {
+          paymentMethodMap[mid].reference_numbers.push(p.reference_number);
+        }
+      }
+    }
+
+    const reconciliation = shift.reconciliations[0] || null;
+
+    res.json({
+      success: true,
+      data: {
+        shift,
+        reconciliation,
+        sales,
+        sales_count: sales.length,
+        total_collected: parseFloat(totalCollected.toFixed(2)),
+        payment_methods: Object.values(paymentMethodMap),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getCurrentShift,
   startShift,
   endShift,
   getShifts,
   getShiftSummary,
+  getPharmacistActivity,
+  getShiftDetails,
 };

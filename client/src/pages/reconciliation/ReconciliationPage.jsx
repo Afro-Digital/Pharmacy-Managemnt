@@ -79,8 +79,45 @@ export const ReconciliationPage = () => {
   const [historyStatusFilter, setHistoryStatusFilter] = useState('ALL');
   const [detailModal, setDetailModal] = useState(null);
 
+  // Inspector Modals for Admin
+  const [selectedShiftDetail, setSelectedShiftDetail] = useState(null);
+  const [shiftDetailLoading, setShiftDetailLoading] = useState(false);
+
+  const [selectedPharmacistDetail, setSelectedPharmacistDetail] = useState(null);
+  const [pharmacistDetailLoading, setPharmacistDetailLoading] = useState(false);
+
   const [errorMessage, setErrorMessage] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+
+  const openShiftDetail = async (shiftId) => {
+    setShiftDetailLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await api.get(`/shifts/${shiftId}`);
+      if (res.data.success) {
+        setSelectedShiftDetail(res.data.data);
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Failed to load cashier shift details');
+    } finally {
+      setShiftDetailLoading(false);
+    }
+  };
+
+  const openPharmacistDetail = async (pharmacistId) => {
+    setPharmacistDetailLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await api.get(`/shifts/pharmacist-activity?pharmacist_id=${pharmacistId}&date=${selectedDate}`);
+      if (res.data.success) {
+        setSelectedPharmacistDetail(res.data.data);
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Failed to load pharmacist clinical activity');
+    } finally {
+      setPharmacistDetailLoading(false);
+    }
+  };
 
   // Auto-dismiss alerts
   useEffect(() => {
@@ -698,6 +735,16 @@ export const ReconciliationPage = () => {
                                 Discrepancy: {shift.discrepancy !== null ? `${shift.discrepancy >= 0 ? '+' : ''}${shift.discrepancy.toFixed(2)} ETB` : 'Pending'}
                               </span>
                             </div>
+
+                            <button
+                              type="button"
+                              onClick={() => openShiftDetail(shift.id)}
+                              disabled={shiftDetailLoading}
+                              className="w-full mt-2 py-1.5 px-2.5 bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-[#4336D6] dark:text-indigo-400 font-bold rounded-xl border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center transition-colors text-[11px] shadow-xs cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1.5 text-[#5345E6]" />
+                              Inspect Cashier Drawer & Sales
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -742,6 +789,16 @@ export const ReconciliationPage = () => {
                                 <span className="font-bold text-emerald-600 dark:text-emerald-400">{p.total_volume.toFixed(2)} ETB</span>
                               </div>
                             </div>
+
+                            <button
+                              type="button"
+                              onClick={() => openPharmacistDetail(p.pharmacist.id)}
+                              disabled={pharmacistDetailLoading}
+                              className="w-full mt-2 py-1.5 px-2.5 bg-white dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold rounded-xl border border-emerald-200 dark:border-emerald-800/80 flex items-center justify-center transition-colors text-[11px] shadow-xs cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                              Inspect Clinical Activity & Prescriptions
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -1049,6 +1106,369 @@ export const ReconciliationPage = () => {
                 }}
               >
                 <Download className="w-3.5 h-3.5 mr-1" /> Download CSV
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Cashier Shift Submission & Itemized Sales Inspector Modal */}
+      <Modal
+        isOpen={Boolean(selectedShiftDetail)}
+        onClose={() => setSelectedShiftDetail(null)}
+        title={`Cashier Shift Audit: ${selectedShiftDetail?.shift?.shift_name || 'Shift Details'}`}
+        maxWidth="max-w-3xl"
+      >
+        {selectedShiftDetail && (
+          <div className="space-y-4 text-xs max-h-[78vh] overflow-y-auto pr-1">
+            {/* Header info */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200/70 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
+                  Cashier Information
+                </span>
+                <span className="text-sm font-extrabold text-slate-900 dark:text-white block">
+                  {selectedShiftDetail.shift.user?.full_name} ({selectedShiftDetail.shift.user?.username})
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {new Date(selectedShiftDetail.shift.start_time).toLocaleString()} –{' '}
+                  {selectedShiftDetail.shift.end_time ? new Date(selectedShiftDetail.shift.end_time).toLocaleString() : 'Currently Active'}
+                </span>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Badge
+                  variant={
+                    selectedShiftDetail.shift.status === 'ACTIVE'
+                      ? 'warning'
+                      : 'info'
+                  }
+                >
+                  Shift: {selectedShiftDetail.shift.status}
+                </Badge>
+                {selectedShiftDetail.reconciliation && (
+                  <Badge
+                    variant={
+                      selectedShiftDetail.reconciliation.status === 'APPROVED'
+                        ? 'success'
+                        : selectedShiftDetail.reconciliation.status === 'FLAGGED'
+                        ? 'danger'
+                        : 'info'
+                    }
+                  >
+                    Reconciliation: {selectedShiftDetail.reconciliation.status}
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {/* 4 Summary Stat Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Opening Float</span>
+                <span className="text-sm font-black text-slate-900 dark:text-white">
+                  {parseFloat(selectedShiftDetail.shift.opening_balance || 0).toFixed(2)} ETB
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Total Collected</span>
+                <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">
+                  {selectedShiftDetail.total_collected?.toFixed(2)} ETB
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Actual Drawer Cash</span>
+                <span className="text-sm font-black text-slate-900 dark:text-white">
+                  {selectedShiftDetail.reconciliation
+                    ? `${parseFloat(selectedShiftDetail.reconciliation.total_actual || 0).toFixed(2)} ETB`
+                    : 'Not Closed Yet'}
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Discrepancy</span>
+                <span
+                  className={`text-sm font-black ${
+                    !selectedShiftDetail.reconciliation
+                      ? 'text-slate-400'
+                      : Math.abs(parseFloat(selectedShiftDetail.reconciliation.total_discrepancy || 0)) < 0.01
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : parseFloat(selectedShiftDetail.reconciliation.total_discrepancy || 0) > 0
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {selectedShiftDetail.reconciliation
+                    ? `${parseFloat(selectedShiftDetail.reconciliation.total_discrepancy || 0) >= 0 ? '+' : ''}${parseFloat(
+                        selectedShiftDetail.reconciliation.total_discrepancy || 0
+                      ).toFixed(2)} ETB`
+                    : 'Pending'}
+                </span>
+              </div>
+            </div>
+
+            {/* Cashier Closing Notes / Explanations */}
+            {(selectedShiftDetail.reconciliation?.notes || selectedShiftDetail.shift.closing_notes) && (
+              <div className="p-3 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-800/50 rounded-xl space-y-1">
+                <span className="font-bold text-amber-800 dark:text-amber-300 block text-[11px]">
+                  Cashier Closing & Handover Notes:
+                </span>
+                <p className="text-slate-700 dark:text-slate-300 italic">
+                  "{selectedShiftDetail.reconciliation?.notes || selectedShiftDetail.shift.closing_notes}"
+                </p>
+              </div>
+            )}
+
+            {/* Reconciliation Breakdown per Channel */}
+            {selectedShiftDetail.reconciliation?.entries && selectedShiftDetail.reconciliation.entries.length > 0 && (
+              <div>
+                <h4 className="font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] mb-1.5">
+                  Payment Channels Counted by Cashier
+                </h4>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
+                  {selectedShiftDetail.reconciliation.entries.map((entry, idx) => {
+                    const diff = parseFloat(entry.discrepancy || 0);
+                    return (
+                      <div key={idx} className="p-2.5 flex items-center justify-between text-xs bg-white dark:bg-slate-850">
+                        <div>
+                          <span className="font-bold text-slate-800 dark:text-slate-200">
+                            {entry.payment_method?.name}
+                          </span>
+                          {entry.reference_numbers && entry.reference_numbers.length > 0 && (
+                            <span className="text-[10px] text-slate-400 block font-mono">
+                              Refs: {entry.reference_numbers.join(', ')}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <span className="font-mono font-bold block text-slate-900 dark:text-white">
+                            Actual: {parseFloat(entry.actual_amount).toFixed(2)} ETB
+                          </span>
+                          <span className="text-[10px] text-slate-400 block">
+                            Expected: {parseFloat(entry.expected_amount).toFixed(2)} ETB •{' '}
+                            <span
+                              className={
+                                Math.abs(diff) < 0.01
+                                  ? 'text-emerald-500 font-bold'
+                                  : diff > 0
+                                  ? 'text-indigo-500 font-bold'
+                                  : 'text-rose-500 font-bold'
+                              }
+                            >
+                              {diff >= 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2)} ETB
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Itemized Sales Log during this Cashier's Shift */}
+            <div>
+              <h4 className="font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] mb-1.5">
+                Itemized Sales Receipts in this Shift ({selectedShiftDetail.sales?.length || 0})
+              </h4>
+              {selectedShiftDetail.sales?.length === 0 ? (
+                <p className="text-slate-400 italic p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl">
+                  No sales processed in this shift.
+                </p>
+              ) : (
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
+                  {selectedShiftDetail.sales.map((sale) => (
+                    <div key={sale.id} className="p-2.5 bg-white dark:bg-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors">
+                      <div className="flex items-center justify-between font-mono font-bold text-slate-800 dark:text-slate-200">
+                        <span>{sale.sale_number}</span>
+                        <span className="text-indigo-600 dark:text-indigo-400">
+                          {parseFloat(sale.total_amount).toFixed(2)} ETB
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                        <span>
+                          {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} •{' '}
+                          Customer: {sale.patient?.name || 'Walk-in'} • Approved by: {sale.pharmacist?.full_name || 'Pharmacist'}
+                        </span>
+                        <span>
+                          {sale.payments?.map((p) => p.payment_method?.name).join(', ') || 'Cash'}
+                        </span>
+                      </div>
+                      {/* Items Preview */}
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 flex flex-wrap gap-1">
+                        {sale.items?.map((item, i) => (
+                          <span key={i} className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-md">
+                            {item.product?.name} × {item.quantity}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+              <Button variant="secondary" size="sm" onClick={() => setSelectedShiftDetail(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Pharmacist Clinical Activity & Prescriptions Inspector Modal */}
+      <Modal
+        isOpen={Boolean(selectedPharmacistDetail)}
+        onClose={() => setSelectedPharmacistDetail(null)}
+        title={`Pharmacist Clinical Activity: ${selectedPharmacistDetail?.pharmacist?.full_name || 'Pharmacist'}`}
+        maxWidth="max-w-3xl"
+      >
+        {selectedPharmacistDetail && (
+          <div className="space-y-4 text-xs max-h-[78vh] overflow-y-auto pr-1">
+            {/* Header info */}
+            <div className="p-4 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-2xl border border-emerald-100 dark:border-emerald-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 block tracking-wider">
+                  Clinical Practitioner Audit
+                </span>
+                <span className="text-sm font-extrabold text-slate-900 dark:text-white block">
+                  {selectedPharmacistDetail.pharmacist.full_name} ({selectedPharmacistDetail.pharmacist.username})
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Activity Date: {selectedPharmacistDetail.date} • Shifts Logged: {selectedPharmacistDetail.shifts?.length || 0}
+                </span>
+              </div>
+
+              <Badge variant="success" size="sm">
+                Role: Pharmacist
+              </Badge>
+            </div>
+
+            {/* 4 Summary KPI Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Sales Approved</span>
+                <span className="text-sm font-black text-slate-900 dark:text-white">
+                  {selectedPharmacistDetail.summary?.sales_approved_count || 0}
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Total Volume</span>
+                <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                  {selectedPharmacistDetail.summary?.total_volume?.toFixed(2) || '0.00'} ETB
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Medicine Units</span>
+                <span className="text-sm font-black text-slate-900 dark:text-white">
+                  {selectedPharmacistDetail.summary?.units_dispensed || 0}
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Rx Dispensed</span>
+                <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">
+                  {selectedPharmacistDetail.summary?.prescriptions_dispensed_count || 0}
+                </span>
+              </div>
+            </div>
+
+            {/* Approved Sales Table */}
+            <div>
+              <h4 className="font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] mb-1.5 flex items-center">
+                <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-500" />
+                Sales Approved & Prepared by this Pharmacist ({selectedPharmacistDetail.approved_sales?.length || 0})
+              </h4>
+              {selectedPharmacistDetail.approved_sales?.length === 0 ? (
+                <p className="text-slate-400 italic p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl">
+                  No sales approved on this date.
+                </p>
+              ) : (
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
+                  {selectedPharmacistDetail.approved_sales.map((sale) => (
+                    <div key={sale.id} className="p-2.5 bg-white dark:bg-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors">
+                      <div className="flex items-center justify-between font-mono font-bold text-slate-800 dark:text-slate-200">
+                        <span>{sale.sale_number}</span>
+                        <span className="text-emerald-600 dark:text-emerald-400">
+                          {parseFloat(sale.total_amount).toFixed(2)} ETB
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                        <span>
+                          {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} •{' '}
+                          Patient: {sale.patient?.full_name || sale.patient?.name || 'Walk-in'} • Cashier: {sale.cashier?.full_name || 'Pending'}
+                        </span>
+                        {sale.prescription && (
+                          <span className="text-indigo-500 font-mono font-bold">
+                            Rx: {sale.prescription.prescription_no || sale.prescription.prescription_number}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 flex flex-wrap gap-1">
+                        {sale.items?.map((item, i) => (
+                          <span key={i} className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-md">
+                            {item.product?.name} ({item.product?.name_am || ''}) × {item.quantity} • {parseFloat(item.unit_price).toFixed(2)} ETB
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Dispensed Prescriptions Section */}
+            <div>
+              <h4 className="font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] mb-1.5 flex items-center">
+                <FileText className="w-3.5 h-3.5 mr-1 text-indigo-500" />
+                Fulfilled Prescriptions ({selectedPharmacistDetail.dispensed_prescriptions?.length || 0})
+              </h4>
+              {selectedPharmacistDetail.dispensed_prescriptions?.length === 0 ? (
+                <p className="text-slate-400 italic p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl">
+                  No prescriptions fulfilled on this date.
+                </p>
+              ) : (
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
+                  {selectedPharmacistDetail.dispensed_prescriptions.map((rx) => (
+                    <div key={rx.id} className="p-2.5 bg-white dark:bg-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                          {rx.prescription_no || rx.prescription_number}
+                        </span>
+                        <Badge variant="success" size="xs">
+                          {rx.status}
+                        </Badge>
+                      </div>
+                      <div className="text-[11px] text-slate-700 dark:text-slate-300 pt-0.5">
+                        Patient: <span className="font-semibold">{rx.patient?.full_name || rx.patient?.name || 'Walk-in'}</span> • Doctor:{' '}
+                        <span className="font-semibold">{rx.prescribed_by || rx.doctor_name || 'General Doctor'}</span>
+                      </div>
+                      {(rx.notes || rx.diagnosis) && (
+                        <div className="text-[10px] text-slate-400 italic">
+                          Notes / Diagnosis: {rx.notes || rx.diagnosis}
+                        </div>
+                      )}
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 flex flex-wrap gap-1">
+                        {rx.items?.map((item, i) => (
+                          <span key={i} className="bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-md">
+                            {item.product?.name} ({item.dosage || `${item.quantity} units`})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+              <Button variant="secondary" size="sm" onClick={() => setSelectedPharmacistDetail(null)}>
+                Close
               </Button>
             </div>
           </div>
