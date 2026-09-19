@@ -21,6 +21,8 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
+  RefreshCw,
   Check,
   Eye,
   Calendar,
@@ -56,6 +58,7 @@ export const ProductsPage = () => {
   const [bulkErrors, setBulkErrors] = useState([]);
   const [isImporting, setIsImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const fileInputRef = useRef(null);
 
   const formatExpiryForInput = (dateStr) => {
@@ -248,23 +251,38 @@ export const ProductsPage = () => {
 
       const { rows } = parseCSV(text);
       const errors = [];
+      const seenFileKeys = new Map(); // key -> rowNum
       const validated = rows.map((r, idx) => {
         const rowNum = idx + 2; // header is row 1
         const name = (r.Name || r.name || '').trim();
         const price = parseFloat(r.Unit_Price_ETB || r.unit_price);
         const type = (r.Product_Type || r.product_type || 'MEDICINE').toUpperCase();
+        const batch_number = (r.Batch_Number || r.batch_number || '').trim();
 
         const rowErrors = [];
         if (!name) rowErrors.push('Missing product name');
         if (isNaN(price) || price < 0) rowErrors.push('Invalid unit price');
         if (type !== 'MEDICINE' && type !== 'COSMETIC') rowErrors.push('Type must be MEDICINE or COSMETIC');
 
+        // Check duplicate within the uploaded CSV file
+        const fileKey = `${name.toLowerCase()}__${batch_number.toLowerCase()}`;
+        let isFileDuplicate = false;
+        let duplicateOfRow = null;
+        if (name) {
+          if (seenFileKeys.has(fileKey)) {
+            isFileDuplicate = true;
+            duplicateOfRow = seenFileKeys.get(fileKey);
+            rowErrors.push(`Duplicate in file: Same medicine and batch as Row ${duplicateOfRow}`);
+          } else {
+            seenFileKeys.set(fileKey, rowNum);
+          }
+        }
+
         if (rowErrors.length > 0) {
           errors.push({ row: rowNum, name: name || 'Unnamed', errors: rowErrors });
         }
 
         const expiry_date = (r.Expiry_Date || r.expiry_date || '').trim();
-        const batch_number = (r.Batch_Number || r.batch_number || '').trim();
         const quantity = (r.Quantity || r.quantity || '').trim();
 
         return {
@@ -276,6 +294,8 @@ export const ProductsPage = () => {
           batch_number,
           quantity,
           isValid: rowErrors.length === 0,
+          isFileDuplicate,
+          duplicateOfRow,
           errorString: rowErrors.join(', '),
         };
       });
@@ -327,6 +347,25 @@ export const ProductsPage = () => {
       setErrorMessage(err.response?.data?.error?.message || 'Bulk upload failed');
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleCleanupDuplicates = async () => {
+    if (!window.confirm('This will search for and merge any historical duplicate products in the database into single primary records. Proceed?')) {
+      return;
+    }
+    setIsCleaningDuplicates(true);
+    setErrorMessage(null);
+    try {
+      const res = await api.post('/products/cleanup-duplicates');
+      if (res.data.success) {
+        setSuccessMessage(res.data.message);
+        fetchProducts();
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.error?.message || 'Failed to clean up duplicate products');
+    } finally {
+      setIsCleaningDuplicates(false);
     }
   };
 
@@ -502,6 +541,16 @@ export const ProductsPage = () => {
         </div>
         {canEditProducts && (
           <div className="flex items-center space-x-2.5">
+            <Button
+              variant="outline"
+              onClick={handleCleanupDuplicates}
+              disabled={isCleaningDuplicates}
+              className="text-xs font-bold px-3 py-2.5 text-slate-600 hover:text-slate-900 border-slate-200"
+              title="Merge duplicate products with identical names"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isCleaningDuplicates ? 'animate-spin' : ''}`} />
+              Deduplicate Catalog
+            </Button>
             <Button
               variant="secondary"
               onClick={() => {
@@ -927,6 +976,10 @@ export const ProductsPage = () => {
                             <span className="text-emerald-600 font-semibold flex items-center">
                               <Check className="w-3.5 h-3.5 mr-0.5" /> Ready
                             </span>
+                          ) : row.isFileDuplicate ? (
+                            <span className="text-amber-600 font-semibold flex items-center" title={row.errorString}>
+                              <AlertTriangle className="w-3.5 h-3.5 mr-0.5 flex-shrink-0" /> Duplicate in file
+                            </span>
                           ) : (
                             <span className="text-rose-600 font-semibold">{row.errorString}</span>
                           )}
@@ -946,15 +999,49 @@ export const ProductsPage = () => {
 
           {/* Step 4: Import confirmation */}
           {importSummary && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 space-y-1">
-              <div className="font-bold flex items-center text-emerald-900">
-                <CheckCircle2 className="w-4 h-4 mr-1 text-emerald-600" />
-                Bulk Import Completed!
+            <div className="space-y-2">
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 space-y-2">
+                <div className="font-bold flex items-center text-emerald-900 text-sm">
+                  <CheckCircle2 className="w-4 h-4 mr-1.5 text-emerald-600" />
+                  Bulk Import Completed
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                  <div className="bg-white p-2 rounded-lg border border-emerald-100 text-center">
+                    <div className="text-[11px] text-slate-500 font-medium">New Products</div>
+                    <div className="text-base font-bold text-emerald-700">{importSummary.createdCount ?? importSummary.successCount}</div>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-emerald-100 text-center">
+                    <div className="text-[11px] text-slate-500 font-medium">New Batches Added</div>
+                    <div className="text-base font-bold text-blue-600">{importSummary.updatedCount || 0}</div>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-emerald-100 text-center">
+                    <div className="text-[11px] text-slate-500 font-medium">Duplicates Prevented</div>
+                    <div className="text-base font-bold text-amber-600">{importSummary.duplicateCount || 0}</div>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-emerald-100 text-center">
+                    <div className="text-[11px] text-slate-500 font-medium">Errors / Failed</div>
+                    <div className="text-base font-bold text-rose-600">{importSummary.failedCount || 0}</div>
+                  </div>
+                </div>
               </div>
-              <p>
-                Successfully imported <strong>{importSummary.successCount}</strong> products.
-                {importSummary.failedCount > 0 && ` ${importSummary.failedCount} rows skipped due to errors.`}
-              </p>
+
+              {/* Show list of duplicates prevented if any */}
+              {importSummary.duplicates && importSummary.duplicates.length > 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1.5 max-h-40 overflow-y-auto">
+                  <div className="font-bold flex items-center text-amber-800">
+                    <AlertTriangle className="w-3.5 h-3.5 mr-1.5 text-amber-600 flex-shrink-0" />
+                    Duplicates Prevented from Importing ({importSummary.duplicates.length}):
+                  </div>
+                  <ul className="divide-y divide-amber-200/50">
+                    {importSummary.duplicates.map((dup, idx) => (
+                      <li key={idx} className="py-1 flex justify-between items-center text-[11px]">
+                        <span><strong>Row {dup.row}:</strong> {dup.name} {dup.batch_number !== 'None' && dup.batch_number !== 'N/A' ? `(Batch: ${dup.batch_number})` : ''}</span>
+                        <span className="text-amber-700 italic ml-2">Already in catalog</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
 

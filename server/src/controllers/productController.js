@@ -479,16 +479,28 @@ const bulkUploadProducts = async (req, res, next) => {
     const results = {
       total: products.length,
       successCount: 0,
+      createdCount: 0,
+      updatedCount: 0,
+      duplicateCount: 0,
       failedCount: 0,
+      duplicates: [],
       errors: [],
       created: [],
+      updated: [],
     };
+
+    // In-memory registries to track products & batches processed during this import
+    // Map: normalizedNameKey -> productObject
+    const processedProducts = new Map();
+    // Set: `${productId}__${batchNumber}`
+    const processedBatches = new Set();
 
     for (let i = 0; i < products.length; i++) {
       const item = products[i];
       const rowNum = i + 1;
 
-      if (!item.name || !item.name.trim()) {
+      const rawName = (item.name || item.Name || '').trim();
+      if (!rawName) {
         results.failedCount++;
         results.errors.push({ row: rowNum, error: 'Product name is required' });
         continue;
@@ -515,40 +527,167 @@ const bulkUploadProducts = async (req, res, next) => {
       const reorderLevel = parseInt(item.reorder_level || item.Reorder_Level) || 10;
       const requiresRx = String(item.requires_prescription || item.Requires_Prescription).toLowerCase() === 'true';
 
+      const rawBarcode = (item.barcode || item.Barcode || '').trim();
+      const rawStrength = (item.strength || item.Strength || '').trim();
+      const rawDosageForm = (item.dosage_form || item.Dosage_Form || '').trim();
+      const expiryRaw = (item.expiry_date || item.Expiry_Date || '').toString().trim();
+      const batchRaw = (item.batch_number || item.Batch_Number || '').toString().trim();
+      const qtyRaw = parseInt(item.quantity || item.Quantity || item.initial_quantity) || 0;
+
+      let parsedExpiry = null;
+      if (expiryRaw) {
+        const parsed = new Date(expiryRaw);
+        if (!isNaN(parsed.getTime())) {
+          parsedExpiry = parsed;
+        }
+      }
+
+      const nameLookupKey = rawName.toLowerCase();
+      const compositeKey = `${nameLookupKey}|${rawStrength.toLowerCase()}|${rawDosageForm.toLowerCase()}`;
+
       try {
+        // ── 1. Find existing product (prevent duplicating the product catalog) ──
+        let existingProduct = null;
+
+        // A. Check in-memory processed products from this import batch first
+        if (rawBarcode && processedProducts.has(`barcode_${rawBarcode.toLowerCase()}`)) {
+          existingProduct = processedProducts.get(`barcode_${rawBarcode.toLowerCase()}`);
+        } else if (processedProducts.has(compositeKey)) {
+          existingProduct = processedProducts.get(compositeKey);
+        } else if (processedProducts.has(nameLookupKey)) {
+          existingProduct = processedProducts.get(nameLookupKey);
+        }
+
+        // B. Check database if not found in current batch memory
+        if (!existingProduct) {
+          if (rawBarcode) {
+            existingProduct = await prisma.product.findFirst({
+              where: { barcode: rawBarcode, is_active: true },
+            });
+          }
+
+          if (!existingProduct) {
+            const candidates = await prisma.product.findMany({
+              where: {
+                name: { equals: rawName, mode: 'insensitive' },
+                is_active: true,
+              },
+            });
+
+            if (candidates.length === 1) {
+              existingProduct = candidates[0];
+            } else if (candidates.length > 1) {
+              const matched = candidates.find((c) =>
+                (rawStrength ? (c.strength || '').toLowerCase().trim() === rawStrength.toLowerCase() : true) &&
+                (rawDosageForm ? (c.dosage_form || '').toLowerCase().trim() === rawDosageForm.toLowerCase() : true)
+              );
+              existingProduct = matched || candidates[0];
+            }
+          }
+        }
+
+        // ── 2. Handle Case: Product Already Exists ──
+        if (existingProduct) {
+          // Register in memory
+          processedProducts.set(nameLookupKey, existingProduct);
+          processedProducts.set(compositeKey, existingProduct);
+          if (existingProduct.barcode) {
+            processedProducts.set(`barcode_${existingProduct.barcode.toLowerCase()}`, existingProduct);
+          }
+
+          const batchKey = `${existingProduct.id}__${(batchRaw || 'NO_BATCH').toLowerCase()}`;
+
+          // Check if this batch already exists in inventory (or was processed earlier in this import)
+          let batchAlreadyExists = processedBatches.has(batchKey);
+
+          if (!batchAlreadyExists) {
+            const existingInventory = await prisma.inventory.findFirst({
+              where: {
+                product_id: existingProduct.id,
+                location: 'STORE',
+                batch_number: batchRaw ? { equals: batchRaw, mode: 'insensitive' } : null,
+              },
+            });
+            if (existingInventory) {
+              batchAlreadyExists = true;
+            }
+          }
+
+          // Case 2A: Exact duplicate (same medicine name AND same batch number)
+          if (batchAlreadyExists) {
+            results.duplicateCount++;
+            results.duplicates.push({
+              row: rowNum,
+              name: rawName,
+              batch_number: batchRaw || 'None',
+              reason: `Duplicate skipped: Medicine "${rawName}" with batch "${batchRaw || 'None'}" already exists in inventory.`,
+            });
+            continue;
+          }
+
+          // Case 2B: Product exists, but row contains a NEW batch number
+          if (batchRaw || expiryRaw || qtyRaw > 0) {
+            await prisma.inventory.create({
+              data: {
+                product_id: existingProduct.id,
+                location: 'STORE',
+                batch_number: batchRaw || null,
+                expiry_date: parsedExpiry,
+                quantity: qtyRaw,
+              },
+            });
+            processedBatches.add(batchKey);
+
+            results.updatedCount++;
+            results.successCount++;
+            results.updated.push({
+              id: existingProduct.id,
+              name: existingProduct.name,
+              batch_number: batchRaw || null,
+            });
+          } else {
+            // Product exists, no batch info provided — prevent creating duplicate product shell
+            results.duplicateCount++;
+            results.duplicates.push({
+              row: rowNum,
+              name: rawName,
+              batch_number: 'N/A',
+              reason: `Duplicate skipped: Medicine "${rawName}" already exists in product catalog.`,
+            });
+          }
+          continue;
+        }
+
+        // ── 3. Handle Case: Completely New Product ──
         const created = await prisma.product.create({
           data: {
-            name: (item.name || item.Name).trim(),
+            name: rawName,
             name_am: item.name_am || item.Name_Amharic || null,
             generic_name: item.generic_name || item.Generic_Name || null,
             category_id: categoryId,
             product_type: productType,
-            dosage_form: item.dosage_form || item.Dosage_Form || null,
-            strength: item.strength || item.Strength || null,
+            dosage_form: rawDosageForm || null,
+            strength: rawStrength || null,
             brand: item.brand || item.Brand || null,
             manufacturer: item.manufacturer || item.Manufacturer || null,
             unit_price: unitPrice,
             reorder_level: reorderLevel,
             requires_prescription: requiresRx,
-            barcode: item.barcode || item.Barcode || null,
+            barcode: rawBarcode || null,
             description: item.description || item.Description || null,
           },
         });
 
-        // If Expiry_Date, Batch_Number or initial Quantity is specified, create initial inventory record
-        const expiryRaw = (item.expiry_date || item.Expiry_Date || '').toString().trim();
-        const batchRaw = (item.batch_number || item.Batch_Number || '').toString().trim();
-        const qtyRaw = parseInt(item.quantity || item.Quantity || item.initial_quantity) || 0;
+        // Register in-memory so subsequent rows in same CSV reuse this product
+        processedProducts.set(nameLookupKey, created);
+        processedProducts.set(compositeKey, created);
+        if (created.barcode) {
+          processedProducts.set(`barcode_${created.barcode.toLowerCase()}`, created);
+        }
+
+        const batchKey = `${created.id}__${(batchRaw || 'NO_BATCH').toLowerCase()}`;
 
         if (expiryRaw || batchRaw || qtyRaw > 0) {
-          let parsedExpiry = null;
-          if (expiryRaw) {
-            const parsed = new Date(expiryRaw);
-            if (!isNaN(parsed.getTime())) {
-              parsedExpiry = parsed;
-            }
-          }
-
           await prisma.inventory.create({
             data: {
               product_id: created.id,
@@ -558,10 +697,12 @@ const bulkUploadProducts = async (req, res, next) => {
               quantity: qtyRaw,
             },
           });
+          processedBatches.add(batchKey);
         }
 
+        results.createdCount++;
         results.successCount++;
-        results.created.push({ id: created.id, name: created.name });
+        results.created.push({ id: created.id, name: created.name, batch_number: batchRaw || null });
       } catch (err) {
         results.failedCount++;
         results.errors.push({ row: rowNum, error: err.message });
@@ -573,10 +714,13 @@ const bulkUploadProducts = async (req, res, next) => {
         user_id: req.user.id,
         action: 'BULK_IMPORT',
         entity_type: 'PRODUCT',
-        entity_id: results.created[0]?.id || null,
+        entity_id: results.created[0]?.id || results.updated[0]?.id || null,
         details: {
           total: results.total,
           successCount: results.successCount,
+          createdCount: results.createdCount,
+          updatedCount: results.updatedCount,
+          duplicateCount: results.duplicateCount,
           failedCount: results.failedCount,
         },
       },
@@ -585,7 +729,134 @@ const bulkUploadProducts = async (req, res, next) => {
     res.json({
       success: true,
       data: results,
-      message: `Successfully imported ${results.successCount} of ${results.total} products.`,
+      message: `Bulk import completed: ${results.createdCount} created, ${results.updatedCount} new batches added, ${results.duplicateCount} duplicates prevented.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/products/cleanup-duplicates
+// Merges duplicate products with identical names into a single primary product
+const cleanupDuplicateProducts = async (req, res, next) => {
+  try {
+    const products = await prisma.product.findMany({
+      include: {
+        inventory: true,
+        _count: {
+          select: {
+            inventory: true,
+            sale_items: true,
+            prescription_items: true,
+            inventory_transfers: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    // Group products by normalized name and product_type
+    const groups = new Map();
+    for (const p of products) {
+      const key = `${p.name.trim().toLowerCase()}__${p.product_type}`;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key).push(p);
+    }
+
+    let cleanedGroupsCount = 0;
+    let removedDuplicatesCount = 0;
+
+    for (const [key, group] of groups.entries()) {
+      if (group.length <= 1) continue;
+
+      cleanedGroupsCount++;
+
+      // Pick primary product: prefer the one with most sales/inventory, or oldest
+      group.sort((a, b) => {
+        const scoreA = (a._count.sale_items * 10) + (a._count.prescription_items * 10) + a._count.inventory;
+        const scoreB = (b._count.sale_items * 10) + (b._count.prescription_items * 10) + b._count.inventory;
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+
+      const primary = group[0];
+      const duplicates = group.slice(1);
+
+      for (const dup of duplicates) {
+        // 1. Move or merge inventory
+        for (const inv of dup.inventory) {
+          const existingInvOnPrimary = await prisma.inventory.findFirst({
+            where: {
+              product_id: primary.id,
+              location: inv.location,
+              batch_number: inv.batch_number ? { equals: inv.batch_number, mode: 'insensitive' } : null,
+            },
+          });
+
+          if (existingInvOnPrimary) {
+            // Merge quantity
+            await prisma.inventory.update({
+              where: { id: existingInvOnPrimary.id },
+              data: { quantity: { increment: inv.quantity } },
+            });
+            await prisma.inventory.delete({ where: { id: inv.id } });
+          } else {
+            // Re-point inventory to primary
+            await prisma.inventory.update({
+              where: { id: inv.id },
+              data: { product_id: primary.id },
+            });
+          }
+        }
+
+        // 2. Re-point transfers
+        await prisma.inventoryTransfer.updateMany({
+          where: { product_id: dup.id },
+          data: { product_id: primary.id },
+        });
+
+        // 3. Re-point sale items
+        await prisma.saleItem.updateMany({
+          where: { product_id: dup.id },
+          data: { product_id: primary.id },
+        });
+
+        // 4. Re-point prescription items
+        await prisma.prescriptionItem.updateMany({
+          where: { product_id: dup.id },
+          data: { product_id: primary.id },
+        });
+
+        // 5. Delete duplicate product
+        await prisma.product.delete({ where: { id: dup.id } });
+        removedDuplicatesCount++;
+      }
+    }
+
+    if (removedDuplicatesCount > 0) {
+      await prisma.auditLog.create({
+        data: {
+          user_id: req.user.id,
+          action: 'CLEANUP_DUPLICATES',
+          entity_type: 'PRODUCT',
+          entity_id: null,
+          details: {
+            cleanedGroupsCount,
+            removedDuplicatesCount,
+          },
+        },
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Cleaned up ${removedDuplicatesCount} duplicate products across ${cleanedGroupsCount} groups.`,
+      data: {
+        cleanedGroupsCount,
+        removedDuplicatesCount,
+      },
     });
   } catch (err) {
     next(err);
@@ -593,7 +864,15 @@ const bulkUploadProducts = async (req, res, next) => {
 };
 
 module.exports = {
-  getProducts, searchProducts, getProduct, createProduct,
-  updateProduct, deleteProduct, getLowStock, getExpiring,
-  getImportTemplate, bulkUploadProducts,
+  getProducts,
+  searchProducts,
+  getProduct,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  getLowStock,
+  getExpiring,
+  getImportTemplate,
+  bulkUploadProducts,
+  cleanupDuplicateProducts,
 };

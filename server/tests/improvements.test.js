@@ -1,5 +1,6 @@
 const request = require('supertest');
 const app = require('../src/app');
+const prisma = require('../src/config/database');
 const path = require('path');
 const fs = require('fs');
 
@@ -158,6 +159,20 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
     });
 
     it('Admin bulk uploads products with validation and category auto-resolution', async () => {
+      // Ensure test products are cleared before creating
+      const existing = await prisma.product.findMany({
+        where: { name: { in: ['Azithromycin 250mg', 'Vaseline Petroleum Jelly'] } },
+        select: { id: true },
+      });
+      if (existing.length > 0) {
+        const ids = existing.map((p) => p.id);
+        await prisma.inventory.deleteMany({ where: { product_id: { in: ids } } });
+        await prisma.inventoryTransfer.deleteMany({ where: { product_id: { in: ids } } });
+        await prisma.saleItem.deleteMany({ where: { product_id: { in: ids } } });
+        await prisma.prescriptionItem.deleteMany({ where: { product_id: { in: ids } } });
+        await prisma.product.deleteMany({ where: { id: { in: ids } } });
+      }
+
       const res = await request(app)
         .post('/api/v1/products/bulk-upload')
         .set('Authorization', `Bearer ${adminToken}`)
@@ -172,6 +187,8 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
               reorder_level: 20,
               dosage_form: 'Tablet',
               strength: '250mg',
+              batch_number: 'BATCH-AZI-001',
+              quantity: 100,
             },
             {
               name: 'Vaseline Petroleum Jelly',
@@ -180,6 +197,8 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
               category: 'Skincare',
               unit_price: 95.00,
               reorder_level: 15,
+              batch_number: 'BATCH-VAS-001',
+              quantity: 50,
             },
           ],
         });
@@ -187,10 +206,93 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.successCount).toBe(2);
+      expect(res.body.data.createdCount).toBe(2);
+      expect(res.body.data.duplicateCount).toBe(0);
       expect(res.body.data.failedCount).toBe(0);
     });
 
+    it('Prevents duplicate import when uploading identical medicine with same name and batch', async () => {
+      // Uploading identical medicine with same name and batch BATCH-AZI-001
+      const res = await request(app)
+        .post('/api/v1/products/bulk-upload')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          products: [
+            {
+              name: 'Azithromycin 250mg',
+              unit_price: 45.00,
+              product_type: 'MEDICINE',
+              batch_number: 'BATCH-AZI-001',
+              quantity: 50,
+            },
+          ],
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.duplicateCount).toBe(1);
+      expect(res.body.data.duplicates.length).toBe(1);
+      expect(res.body.data.duplicates[0].name).toBe('Azithromycin 250mg');
+      expect(res.body.data.duplicates[0].reason).toContain('already exists in inventory');
+
+      // Verify no duplicate product was created in DB
+      const count = await prisma.product.count({
+        where: { name: 'Azithromycin 250mg' },
+      });
+      expect(count).toBe(1);
+    });
+
+    it('Adds new batch to existing medicine without duplicating the product', async () => {
+      // Same medicine name, but DIFFERENT batch BATCH-AZI-002
+      const res = await request(app)
+        .post('/api/v1/products/bulk-upload')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          products: [
+            {
+              name: 'Azithromycin 250mg',
+              unit_price: 45.00,
+              product_type: 'MEDICINE',
+              batch_number: 'BATCH-AZI-002',
+              quantity: 75,
+            },
+          ],
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.updatedCount).toBe(1);
+      expect(res.body.data.createdCount).toBe(0);
+      expect(res.body.data.duplicateCount).toBe(0);
+
+      // Verify product count in DB remains 1
+      const productCount = await prisma.product.count({
+        where: { name: 'Azithromycin 250mg' },
+      });
+      expect(productCount).toBe(1);
+
+      // Verify inventory has both batches
+      const batches = await prisma.inventory.findMany({
+        where: { product: { name: 'Azithromycin 250mg' } },
+      });
+      expect(batches.length).toBe(2);
+    });
+
+    it('Admin can trigger duplicate cleanup endpoint', async () => {
+      const res = await request(app)
+        .post('/api/v1/products/cleanup-duplicates')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveProperty('cleanedGroupsCount');
+      expect(res.body.data).toHaveProperty('removedDuplicatesCount');
+    });
+
     it('Admin bulk receives multiple inventory items into store', async () => {
+      const prod = await prisma.product.findFirst({ where: { is_active: true } });
+      testProductId = prod.id;
+
       const res = await request(app)
         .post('/api/v1/inventory/bulk-receive')
         .set('Authorization', `Bearer ${adminToken}`)
