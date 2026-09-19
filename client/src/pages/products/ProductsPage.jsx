@@ -85,12 +85,14 @@ export const ProductsPage = () => {
     product_type: 'MEDICINE',
     dosage_form: '',
     strength: '',
+    unit: 'strip',
     brand: '',
     manufacturer: '',
     unit_price: '',
     reorder_level: 10,
     requires_prescription: false,
     barcode: '',
+    sku: '',
     description: '',
     expiry_date: '',
     batch_number: '',
@@ -139,11 +141,13 @@ export const ProductsPage = () => {
   const openAddModal = () => {
     setEditingProduct(null);
     setFormData(initialFormState);
+    setErrorMessage(null);
     setProductModalOpen(true);
   };
 
   const openEditModal = (prod) => {
     setEditingProduct(prod);
+    setErrorMessage(null);
     const primaryInv = prod.inventory?.[0];
     setFormData({
       name: prod.name || '',
@@ -153,12 +157,14 @@ export const ProductsPage = () => {
       product_type: prod.product_type || 'MEDICINE',
       dosage_form: prod.dosage_form || '',
       strength: prod.strength || '',
+      unit: prod.unit || 'strip',
       brand: prod.brand || '',
       manufacturer: prod.manufacturer || '',
       unit_price: prod.unit_price || '',
-      reorder_level: prod.reorder_level || 10,
+      reorder_level: prod.reorder_level !== undefined ? prod.reorder_level : 10,
       requires_prescription: prod.requires_prescription || false,
       barcode: prod.barcode || '',
+      sku: prod.sku || '',
       description: prod.description || '',
       expiry_date: formatExpiryForInput(primaryInv?.expiry_date),
       batch_number: primaryInv?.batch_number || '',
@@ -171,6 +177,31 @@ export const ProductsPage = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setErrorMessage(null);
+
+    // Strict validation for the 10 required fields
+    const missing = [];
+    if (!formData.name?.trim()) missing.push('Name');
+    if (!formData.product_type) missing.push('Product Type');
+    const price = parseFloat(formData.unit_price);
+    if (formData.unit_price === '' || isNaN(price) || price < 0) missing.push('Unit Price (ETB)');
+    if (formData.requires_prescription === undefined || formData.requires_prescription === null) {
+      missing.push('Requires Prescription');
+    }
+    if (!formData.expiry_date) missing.push('Expiry Date');
+    if (!formData.batch_number?.trim()) missing.push('Batch Number');
+    if (formData.initial_quantity === '' || isNaN(parseInt(formData.initial_quantity)) || parseInt(formData.initial_quantity) < 0) {
+      missing.push('Quantity');
+    }
+    if (!formData.unit?.trim()) missing.push('Unit (bottle, strip, sachet, ampule, etc.)');
+    if (!formData.dosage_form?.trim()) missing.push('Dosage Form');
+    if (!formData.strength?.trim()) missing.push('Strength (e.g., 100mg, 50g)');
+
+    if (missing.length > 0) {
+      setErrorMessage(`Please fill in all required fields: ${missing.join(', ')}`);
+      return;
+    }
+
     try {
       const payload = {
         ...formData,
@@ -262,20 +293,38 @@ export const ProductsPage = () => {
       const validated = rows.map((r, idx) => {
         const rowNum = idx + 2; // header is row 1
         const name = (r.Name || r.name || '').trim();
-        const price = parseFloat(r.Unit_Price_ETB || r.unit_price);
-        const type = (r.Product_Type || r.product_type || 'MEDICINE').toUpperCase();
-        const batch_number = (r.Batch_Number || r.batch_number || '').trim();
+        const price = parseFloat(r.Unit_Price_ETB !== undefined ? r.Unit_Price_ETB : (r.unit_price !== undefined ? r.unit_price : r['Unit Price']));
+        const type = (r.Product_Type || r.product_type || '').toUpperCase().trim();
+        const batch_number = (r.Batch_Number || r.batch_number || r['Batch Number'] || '').trim();
+        const expiry_date = (r.Expiry_Date || r.expiry_date || r['Expiry Date'] || '').trim();
+        const quantityStr = (r.Quantity !== undefined ? r.Quantity : (r.quantity !== undefined ? r.quantity : (r.initial_quantity !== undefined ? r.initial_quantity : r['Qty'] || ''))).toString().trim();
+        const unit = (r.Unit || r.unit || r['Unit(bottle, stp, sachets, ampule)'] || r['Packaging Unit'] || '').trim();
+        const dosage_form = (r.Dosage_Form || r.dosage_form || r['Dosage Form'] || '').trim();
+        const strength = (r.Strength || r.strength || '').trim();
+        const rxRaw = r.Requires_Prescription !== undefined ? r.Requires_Prescription : (r.requires_prescription !== undefined ? r.requires_prescription : r.requires_rx);
 
         const rowErrors = [];
-        if (!name) rowErrors.push('Missing product name');
-        if (isNaN(price) || price < 0) rowErrors.push('Invalid unit price');
-        if (type !== 'MEDICINE' && type !== 'COSMETIC') rowErrors.push('Type must be MEDICINE or COSMETIC');
+        if (!name) rowErrors.push('Missing Name');
+        if (!type || (type !== 'MEDICINE' && type !== 'COSMETIC')) rowErrors.push('Product Type must be MEDICINE or COSMETIC');
+        if (isNaN(price) || price < 0 || (r.Unit_Price_ETB === '' && r.unit_price === '')) rowErrors.push('Missing / Invalid Unit Price (ETB)');
+        if (rxRaw === undefined || rxRaw === null || rxRaw === '') rowErrors.push('Missing Requires Prescription (true/false)');
+        if (!expiry_date) {
+          rowErrors.push('Missing Expiry Date');
+        } else {
+          const parsedD = new Date(expiry_date);
+          if (isNaN(parsedD.getTime())) rowErrors.push('Invalid Expiry Date (use YYYY-MM-DD)');
+        }
+        if (!batch_number) rowErrors.push('Missing Batch Number');
+        if (!quantityStr || isNaN(parseInt(quantityStr)) || parseInt(quantityStr) < 0) rowErrors.push('Missing / Invalid Quantity');
+        if (!unit) rowErrors.push('Missing Unit (bottle, strip, sachet, ampule, etc.)');
+        if (!dosage_form) rowErrors.push('Missing Dosage Form');
+        if (!strength) rowErrors.push('Missing Strength (e.g., 100mg, 50g)');
 
         // Check duplicate within the uploaded CSV file
         const fileKey = `${name.toLowerCase()}__${batch_number.toLowerCase()}`;
         let isFileDuplicate = false;
         let duplicateOfRow = null;
-        if (name) {
+        if (name && batch_number) {
           if (seenFileKeys.has(fileKey)) {
             isFileDuplicate = true;
             duplicateOfRow = seenFileKeys.get(fileKey);
@@ -289,17 +338,18 @@ export const ProductsPage = () => {
           errors.push({ row: rowNum, name: name || 'Unnamed', errors: rowErrors });
         }
 
-        const expiry_date = (r.Expiry_Date || r.expiry_date || '').trim();
-        const quantity = (r.Quantity || r.quantity || '').trim();
-
         return {
           ...r,
           name,
           unit_price: isNaN(price) ? 0 : price,
-          product_type: type,
+          product_type: type || 'MEDICINE',
           expiry_date,
           batch_number,
-          quantity,
+          quantity: quantityStr ? parseInt(quantityStr) : 0,
+          unit,
+          dosage_form,
+          strength,
+          requires_prescription: rxRaw !== undefined ? String(rxRaw).toLowerCase() === 'true' : false,
           isValid: rowErrors.length === 0,
           isFileDuplicate,
           duplicateOfRow,
@@ -336,8 +386,15 @@ export const ProductsPage = () => {
   const handleExecuteBulkImport = async () => {
     const validRows = parsedRows.filter((r) => r.isValid);
     if (validRows.length === 0) {
-      setErrorMessage('No valid rows to import.');
+      setErrorMessage('No valid rows to import. All 10 required fields must be filled for every product before importing.');
       return;
+    }
+
+    if (bulkErrors.length > 0) {
+      const confirmIncomplete = window.confirm(
+        `Warning: ${bulkErrors.length} row(s) have missing required fields and will NOT be imported.\n\nOnly the ${validRows.length} fully complete row(s) will be imported. Proceed?`
+      );
+      if (!confirmIncomplete) return;
     }
 
     setIsImporting(true);
@@ -347,7 +404,7 @@ export const ProductsPage = () => {
       const res = await api.post('/products/bulk-upload', { products: validRows });
       if (res.data.success) {
         setImportSummary(res.data.data);
-        setSuccessMessage(res.data.message);
+        setSuccessMessage(res.data.message || `Successfully processed ${res.data.data.successCount} product(s)`);
         fetchProducts();
       }
     } catch (err) {
@@ -680,9 +737,22 @@ export const ProductsPage = () => {
         maxWidth="max-w-2xl"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs text-indigo-900 flex items-center justify-between">
+            <span className="font-semibold">
+              Fields marked with an asterisk (<span className="text-rose-500 font-bold">*</span>) are strictly required.
+            </span>
+            <span className="text-[11px] text-indigo-600 font-medium">
+              Barcode & SKU are auto-generated if left blank
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Select
-              label={t('products.type')}
+              label={
+                <span>
+                  {t('products.type')} <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
               required
               value={formData.product_type}
               onChange={(e) => setFormData({ ...formData, product_type: e.target.value })}
@@ -693,18 +763,24 @@ export const ProductsPage = () => {
             />
             <Select
               label={t('products.category')}
-              required
               value={formData.category_id}
               onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
-              options={categories
-                .filter((c) => c.type === formData.product_type)
-                .map((c) => ({ value: c.id, label: c.name }))}
+              options={[
+                { value: '', label: 'Select Category (Optional)' },
+                ...categories
+                  .filter((c) => c.type === formData.product_type)
+                  .map((c) => ({ value: c.id, label: c.name })),
+              ]}
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
-              label={t('products.name_en')}
+              label={
+                <span>
+                  {t('products.name_en')} <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
               required
               placeholder="e.g. Amoxicillin 500mg"
               value={formData.name}
@@ -718,47 +794,62 @@ export const ProductsPage = () => {
             />
           </div>
 
-          {formData.product_type === 'MEDICINE' ? (
-            <div className="grid grid-cols-3 gap-3">
-              <Input
-                label={t('products.generic_name')}
-                placeholder="Amoxicillin"
-                value={formData.generic_name}
-                onChange={(e) => setFormData({ ...formData, generic_name: e.target.value })}
-              />
-              <Input
-                label={t('products.dosage_form')}
-                placeholder="Capsule, Tablet, Syrup"
-                value={formData.dosage_form}
-                onChange={(e) => setFormData({ ...formData, dosage_form: e.target.value })}
-              />
-              <Input
-                label={t('products.strength')}
-                placeholder="500mg, 100ml"
-                value={formData.strength}
-                onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
-              />
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="Brand"
-                placeholder="e.g. Nivea"
-                value={formData.brand}
-                onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
-              />
-              <Input
-                label="Volume / Size"
-                placeholder="e.g. 200ml, 50g"
-                value={formData.strength}
-                onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
-              />
-            </div>
-          )}
-
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Input
-              label={t('products.unit_price')}
+              label={
+                <span>
+                  {t('products.dosage_form')} <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
+              required
+              placeholder="e.g. Tablet, Capsule, Syrup, Cream"
+              value={formData.dosage_form}
+              onChange={(e) => setFormData({ ...formData, dosage_form: e.target.value })}
+              helper="Capsule, Tablet, Syrup, Injection, Cream, etc."
+            />
+            <Input
+              label={
+                <span>
+                  {t('products.strength')} <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
+              required
+              placeholder="e.g. 500mg, 100ml, 50g"
+              value={formData.strength}
+              onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
+              helper="Concentration or package weight"
+            />
+            <Select
+              label={
+                <span>
+                  Packaging Unit <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
+              required
+              value={formData.unit}
+              onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+              options={[
+                { value: 'strip', label: 'Strip (ካርታ)' },
+                { value: 'bottle', label: 'Bottle (ጠርሙስ)' },
+                { value: 'sachet', label: 'Sachet (ፓኬት)' },
+                { value: 'ampule', label: 'Ampule (አምፑል)' },
+                { value: 'box', label: 'Box (ካርቶን / ሳጥን)' },
+                { value: 'vial', label: 'Vial (ቫያል)' },
+                { value: 'tube', label: 'Tube (ቱቦ)' },
+                { value: 'tablet', label: 'Tablet (ኪኒን)' },
+                { value: 'jar', label: 'Jar (ማሰሮ)' },
+              ]}
+              helper="Base dispensing/sales unit"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Input
+              label={
+                <span>
+                  {t('products.unit_price')} (ETB) <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
               type="number"
               step="0.01"
               required
@@ -767,6 +858,20 @@ export const ProductsPage = () => {
               value={formData.unit_price}
               onChange={(e) => setFormData({ ...formData, unit_price: e.target.value })}
             />
+            <Select
+              label={
+                <span>
+                  Requires Prescription <span className="text-rose-500 font-bold">*</span>
+                </span>
+              }
+              required
+              value={formData.requires_prescription ? 'true' : 'false'}
+              onChange={(e) => setFormData({ ...formData, requires_prescription: e.target.value === 'true' })}
+              options={[
+                { value: 'false', label: 'No (Over-The-Counter OTC)' },
+                { value: 'true', label: 'Yes (Prescription Required Rx)' },
+              ]}
+            />
             <Input
               label={t('products.reorder_level')}
               type="number"
@@ -774,12 +879,45 @@ export const ProductsPage = () => {
               placeholder="10"
               value={formData.reorder_level}
               onChange={(e) => setFormData({ ...formData, reorder_level: e.target.value })}
+              helper="Alert trigger for low stock"
             />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
-              label={t('products.barcode')}
-              placeholder="MED-AMX-500"
+              label="Barcode (Auto-generated if empty)"
+              placeholder="e.g. 890123456789 or scan"
               value={formData.barcode}
               onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+              helper="Leave blank to auto-generate standard barcode"
+            />
+            <Input
+              label="SKU (Auto-generated if empty)"
+              placeholder="e.g. MED-AMX-101"
+              value={formData.sku}
+              onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+              helper="Leave blank to auto-generate SKU"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Input
+              label={t('products.generic_name')}
+              placeholder="e.g. Amoxicillin Trihydrate"
+              value={formData.generic_name}
+              onChange={(e) => setFormData({ ...formData, generic_name: e.target.value })}
+            />
+            <Input
+              label="Brand"
+              placeholder="e.g. Epharm, Cadila, Nivea"
+              value={formData.brand}
+              onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
+            />
+            <Input
+              label="Manufacturer"
+              placeholder="e.g. Ethiopian Pharmaceuticals"
+              value={formData.manufacturer}
+              onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value })}
             />
           </div>
 
@@ -788,10 +926,10 @@ export const ProductsPage = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2 text-slate-800 font-bold text-xs">
                 <Calendar className="w-4 h-4 text-[#5345E6]" />
-                <span>Expiration & Batch Tracking</span>
+                <span>Expiration & Batch Tracking (Required)</span>
               </div>
               <span className="text-[10px] text-slate-500 font-medium">
-                {editingProduct ? 'Edit, add, or change expiration date' : 'Set initial expiration date & batch'}
+                {editingProduct ? 'Edit or select batch to update' : 'Set initial batch & stock levels'}
               </span>
             </div>
 
@@ -853,14 +991,24 @@ export const ProductsPage = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input
-                label="Expiration Date"
+                label={
+                  <span>
+                    Expiration Date <span className="text-rose-500 font-bold">*</span>
+                  </span>
+                }
                 type="date"
+                required
                 value={formData.expiry_date}
                 onChange={(e) => setFormData({ ...formData, expiry_date: e.target.value })}
-                helper="Date after which item must not be dispensed"
+                helper="Mandatory expiration date"
               />
               <Input
-                label="Batch / Lot Number"
+                label={
+                  <span>
+                    Batch / Lot Number <span className="text-rose-500 font-bold">*</span>
+                  </span>
+                }
+                required
                 placeholder="e.g. BATCH-2026-01"
                 value={formData.batch_number}
                 onChange={(e) => setFormData({ ...formData, batch_number: e.target.value })}
@@ -871,12 +1019,18 @@ export const ProductsPage = () => {
             {!editingProduct && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <Input
-                  label="Initial Stock Quantity (Optional)"
+                  label={
+                    <span>
+                      Initial Stock Quantity <span className="text-rose-500 font-bold">*</span>
+                    </span>
+                  }
                   type="number"
                   min="0"
-                  placeholder="0"
+                  required
+                  placeholder="e.g. 50"
                   value={formData.initial_quantity}
                   onChange={(e) => setFormData({ ...formData, initial_quantity: e.target.value })}
+                  helper="Units to place in initial inventory"
                 />
                 <Select
                   label="Initial Stock Location"
@@ -886,9 +1040,23 @@ export const ProductsPage = () => {
                     { value: 'STORE', label: 'Store (Bulk Warehouse)' },
                     { value: 'DISPENSARY', label: 'Dispensary (Front Counter)' },
                   ]}
+                  helper="Warehouse store or counter shelf"
                 />
               </div>
             )}
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-700 block mb-1">
+              Description / Clinical Guidelines (Optional)
+            </label>
+            <textarea
+              rows={2}
+              className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-[#5345E6]/20 focus:border-[#5345E6]"
+              placeholder="e.g. Usage instructions, contraindications, or storage notes..."
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            />
           </div>
 
           <Button type="submit" className="w-full py-2.5 font-bold mt-2">
@@ -986,8 +1154,8 @@ export const ProductsPage = () => {
                 </div>
               )}
 
-              {/* Table Preview (first 5 rows) */}
-              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+              {/* Table Preview */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto">
                 <table className="w-full text-xs text-left">
                   <thead className="bg-slate-100 text-slate-600 font-semibold sticky top-0">
                     <tr>
@@ -995,14 +1163,18 @@ export const ProductsPage = () => {
                       <th className="p-2">Name</th>
                       <th className="p-2">Type</th>
                       <th className="p-2">Price (ETB)</th>
-                      <th className="p-2">Category</th>
-                      <th className="p-2">Expiry Date</th>
+                      <th className="p-2">Qty</th>
+                      <th className="p-2">Unit</th>
+                      <th className="p-2">Dosage Form</th>
+                      <th className="p-2">Strength</th>
                       <th className="p-2">Batch No.</th>
+                      <th className="p-2">Expiry Date</th>
+                      <th className="p-2">Rx</th>
                       <th className="p-2">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {parsedRows.slice(0, 10).map((row, i) => (
+                    {parsedRows.slice(0, 15).map((row, i) => (
                       <tr key={i} className={row.isValid ? 'bg-white' : 'bg-rose-50/50'}>
                         <td className="p-2 font-mono text-slate-400">{i + 1}</td>
                         <td className="p-2 font-semibold text-slate-800">{row.name || '—'}</td>
@@ -1012,16 +1184,26 @@ export const ProductsPage = () => {
                           </Badge>
                         </td>
                         <td className="p-2 font-mono">ETB {row.unit_price}</td>
-                        <td className="p-2 text-slate-600">{row.Category || row.category || 'Default'}</td>
+                        <td className="p-2 font-bold text-slate-800">{row.quantity ?? '—'}</td>
+                        <td className="p-2 text-slate-600">{row.unit || <span className="text-rose-500 font-semibold italic">Missing</span>}</td>
+                        <td className="p-2 text-slate-600">{row.dosage_form || <span className="text-rose-500 font-semibold italic">Missing</span>}</td>
+                        <td className="p-2 text-slate-600">{row.strength || <span className="text-rose-500 font-semibold italic">Missing</span>}</td>
+                        <td className="p-2 font-mono text-slate-600">
+                          {row.batch_number || <span className="text-rose-500 font-semibold italic">Missing</span>}
+                        </td>
                         <td className="p-2 font-mono text-slate-700">
                           {row.expiry_date ? (
                             <span className="text-emerald-700 font-semibold">{row.expiry_date}</span>
                           ) : (
-                            <span className="text-slate-400 italic">None</span>
+                            <span className="text-rose-500 font-semibold italic">Missing</span>
                           )}
                         </td>
-                        <td className="p-2 font-mono text-slate-600">
-                          {row.batch_number || '—'}
+                        <td className="p-2">
+                          {row.requires_prescription ? (
+                            <span className="text-amber-700 font-semibold">Rx</span>
+                          ) : (
+                            <span className="text-slate-500">OTC</span>
+                          )}
                         </td>
                         <td className="p-2">
                           {row.isValid ? (
@@ -1033,7 +1215,9 @@ export const ProductsPage = () => {
                               <AlertTriangle className="w-3.5 h-3.5 mr-0.5 flex-shrink-0" /> Duplicate in file
                             </span>
                           ) : (
-                            <span className="text-rose-600 font-semibold">{row.errorString}</span>
+                            <span className="text-rose-600 font-semibold text-[11px] block max-w-xs truncate" title={row.errorString}>
+                              ⚠ {row.errorString}
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -1123,150 +1307,227 @@ export const ProductsPage = () => {
       <Modal
         isOpen={viewModalOpen}
         onClose={() => setViewModalOpen(false)}
-        title="Product Specifications & Details"
-        maxWidth="max-w-2xl"
+        title="Product Information & Complete Details"
+        maxWidth="max-w-3xl"
       >
-        {selectedProductForView && (
-          <div className="space-y-5">
-            {/* Header with thumbnail & badges */}
-            <div className="flex items-start justify-between p-4 bg-[#F4F5FA] rounded-2xl border border-slate-100">
-              <div className="flex items-center space-x-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200/70 flex items-center justify-center text-[#5345E6] shadow-xs">
-                  <Package className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900">
-                    {selectedProductForView.name}
-                  </h3>
-                  {selectedProductForView.name_am && (
-                    <p className="text-xs text-slate-500 font-ethiopic">
-                      {selectedProductForView.name_am}
+        {selectedProductForView && (() => {
+          const primaryBatch = selectedProductForView.inventory?.[0];
+          const totalQty = (selectedProductForView.inventory || []).reduce((acc, inv) => acc + (inv.quantity || 0), 0);
+          const storeQty = (selectedProductForView.inventory || []).filter((i) => i.location === 'STORE').reduce((acc, inv) => acc + (inv.quantity || 0), 0);
+          const dispQty = (selectedProductForView.inventory || []).filter((i) => i.location === 'DISPENSARY').reduce((acc, inv) => acc + (inv.quantity || 0), 0);
+
+          const renderVal = (val) => {
+            if (val === null || val === undefined || val === '' || val === false && typeof val !== 'boolean') {
+              return <span className="text-slate-400 font-mono font-bold">-</span>;
+            }
+            return <span className="font-semibold text-slate-800">{val}</span>;
+          };
+
+          return (
+            <div className="space-y-4">
+              {/* Header with thumbnail & badges */}
+              <div className="flex items-start justify-between p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80">
+                <div className="flex items-center space-x-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200/70 flex items-center justify-center text-[#5345E6] shadow-xs">
+                    <Package className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold text-slate-900">
+                      {selectedProductForView.name || '-'}
+                    </h3>
+                    {selectedProductForView.name_am && (
+                      <p className="text-xs text-slate-500 font-ethiopic">
+                        {selectedProductForView.name_am}
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-400 font-medium mt-0.5">
+                      {selectedProductForView.generic_name || selectedProductForView.brand || '-'}
                     </p>
-                  )}
-                  <p className="text-xs text-slate-400 font-medium mt-0.5">
-                    {selectedProductForView.generic_name || selectedProductForView.brand || 'Standard Item'}
-                  </p>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end space-y-1.5">
+                  <Badge variant={selectedProductForView.product_type === 'MEDICINE' ? 'primary' : 'info'}>
+                    {selectedProductForView.product_type || '-'}
+                  </Badge>
+                  <Badge variant={selectedProductForView.requires_prescription ? 'warning' : 'neutral'}>
+                    {selectedProductForView.requires_prescription ? 'Prescription Required (Rx)' : 'Over-the-Counter (OTC)'}
+                  </Badge>
                 </div>
               </div>
-              <div className="flex flex-col items-end space-y-1">
-                <Badge variant={selectedProductForView.product_type === 'MEDICINE' ? 'primary' : 'info'}>
-                  {selectedProductForView.product_type}
-                </Badge>
-                <Badge variant={selectedProductForView.requires_prescription ? 'warning' : 'neutral'}>
-                  {selectedProductForView.requires_prescription ? 'Prescription Required' : 'Over-the-Counter'}
-                </Badge>
-              </div>
-            </div>
 
-            {/* Specifications Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-              <div className="p-3 bg-white rounded-xl border border-slate-100">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Unit Price</span>
-                <span className="text-base font-extrabold text-slate-900 mt-0.5 block">
-                  ETB {parseFloat(selectedProductForView.unit_price).toFixed(2)}
-                </span>
-              </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-100">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Category</span>
-                <span className="text-sm font-bold text-slate-800 mt-0.5 block">
-                  {selectedProductForView.category?.name || 'Unassigned'}
-                </span>
-              </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-100">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Reorder Threshold</span>
-                <span className="text-sm font-bold text-slate-800 mt-0.5 block">
-                  {selectedProductForView.reorder_level} units
-                </span>
-              </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-100">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Barcode / SKU</span>
-                <span className="text-xs font-mono font-medium text-slate-700 mt-0.5 block truncate">
-                  {selectedProductForView.barcode || 'None (Auto-generated)'}
-                </span>
-              </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-100">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Strength</span>
-                <span className="text-xs font-medium text-slate-800 mt-0.5 block">
-                  {selectedProductForView.strength || 'Standard'}
-                </span>
-              </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-100">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px]">Dosage Form</span>
-                <span className="text-xs font-medium text-slate-800 mt-0.5 block">
-                  {selectedProductForView.dosage_form || 'Unit'}
-                </span>
-              </div>
-            </div>
+              {/* Exact Information Grid */}
+              <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white shadow-xs">
+                <div className="px-4 py-2.5 bg-slate-100/70 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Exact Entered Specifications
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    Shows dash (-) if not filled
+                  </span>
+                </div>
 
-            {selectedProductForView.description && (
-              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 text-xs">
-                <span className="text-slate-400 font-semibold block uppercase text-[10px] mb-1">
-                  Product Notes & Clinical Guidelines
-                </span>
-                <p className="text-slate-700 leading-relaxed">
-                  {selectedProductForView.description}
-                </p>
-              </div>
-            )}
-
-            {/* Stock Batches & Expiration Dates Section */}
-            <div className="p-3.5 bg-white rounded-xl border border-slate-100 space-y-2">
-              <span className="text-slate-500 font-semibold block uppercase text-[10px]">
-                Stock Batches & Expiration Dates
-              </span>
-              {selectedProductForView.inventory && selectedProductForView.inventory.length > 0 ? (
-                <div className="divide-y divide-slate-100 text-xs">
-                  {selectedProductForView.inventory.map((inv, idx) => (
-                    <div key={idx} className="py-2 flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold text-slate-800">
-                          Batch: {inv.batch_number || 'Default Batch'}
-                        </div>
-                        <div className="text-[11px] text-slate-400">
-                          Location: {inv.location} • Qty: {inv.quantity} units {inv.shelf_location ? `• Shelf: ${inv.shelf_location}` : ''}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        {inv.expiry_date ? (
-                          <span className="font-mono font-semibold text-slate-700">
-                            Exp: {new Date(inv.expiry_date).toISOString().split('T')[0]}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic">No expiry recorded</span>
-                        )}
-                      </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-slate-100 text-xs">
+                  {/* Left Column */}
+                  <div className="divide-y divide-slate-100">
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Name:</span>
+                      {renderVal(selectedProductForView.name)}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-slate-400 italic">No inventory batches registered yet.</p>
-              )}
-            </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Name (Amharic):</span>
+                      {renderVal(selectedProductForView.name_am)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Product Type:</span>
+                      {renderVal(selectedProductForView.product_type)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Category:</span>
+                      {renderVal(selectedProductForView.category?.name)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Generic Name:</span>
+                      {renderVal(selectedProductForView.generic_name)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Dosage Form:</span>
+                      {renderVal(selectedProductForView.dosage_form)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Strength:</span>
+                      {renderVal(selectedProductForView.strength)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Packaging Unit:</span>
+                      {renderVal(selectedProductForView.unit)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Brand:</span>
+                      {renderVal(selectedProductForView.brand)}
+                    </div>
+                  </div>
 
-            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setViewModalOpen(false)}
-                className="text-xs"
-              >
-                Close
-              </Button>
-              {canEditProducts && (
+                  {/* Right Column */}
+                  <div className="divide-y divide-slate-100">
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Manufacturer:</span>
+                      {renderVal(selectedProductForView.manufacturer)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Unit Price (ETB):</span>
+                      {renderVal(selectedProductForView.unit_price ? `ETB ${parseFloat(selectedProductForView.unit_price).toFixed(2)}` : null)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Reorder Level:</span>
+                      {renderVal(selectedProductForView.reorder_level !== undefined && selectedProductForView.reorder_level !== null ? `${selectedProductForView.reorder_level} units` : null)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Barcode:</span>
+                      {renderVal(selectedProductForView.barcode)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">SKU:</span>
+                      {renderVal(selectedProductForView.sku)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Requires Prescription:</span>
+                      {renderVal(selectedProductForView.requires_prescription !== undefined && selectedProductForView.requires_prescription !== null ? (selectedProductForView.requires_prescription ? 'Yes (Rx)' : 'No (OTC)') : null)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Primary Batch:</span>
+                      {renderVal(primaryBatch?.batch_number)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Expiry Date:</span>
+                      {renderVal(primaryBatch?.expiry_date ? new Date(primaryBatch.expiry_date).toISOString().split('T')[0] : null)}
+                    </div>
+                    <div className="flex items-center justify-between p-2.5">
+                      <span className="text-slate-500 font-medium">Total In Stock:</span>
+                      {renderVal(totalQty > 0 ? `${totalQty} ${selectedProductForView.unit || 'units'} (Store: ${storeQty}, Dispensary: ${dispQty})` : '0 units')}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Description Row */}
+                <div className="p-3 bg-slate-50/60 border-t border-slate-100 text-xs flex items-start space-x-2">
+                  <span className="text-slate-500 font-medium w-28 flex-shrink-0">Description:</span>
+                  <div className="text-slate-700 flex-1">
+                    {renderVal(selectedProductForView.description)}
+                  </div>
+                </div>
+              </div>
+
+              {/* All Inventory Batches Table */}
+              <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white shadow-xs">
+                <div className="px-4 py-2 bg-slate-100/70 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Registered Batches & Storage Locations ({selectedProductForView.inventory?.length || 0})
+                  </span>
+                </div>
+                {selectedProductForView.inventory && selectedProductForView.inventory.length > 0 ? (
+                  <div className="overflow-x-auto max-h-40 overflow-y-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-50 text-slate-500 border-b border-slate-100 sticky top-0">
+                        <tr>
+                          <th className="p-2">Batch No</th>
+                          <th className="p-2">Location</th>
+                          <th className="p-2">Quantity</th>
+                          <th className="p-2">Expiry Date</th>
+                          <th className="p-2">Shelf</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedProductForView.inventory.map((inv, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/60">
+                            <td className="p-2 font-mono font-medium text-slate-800">{inv.batch_number || '-'}</td>
+                            <td className="p-2">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${inv.location === 'DISPENSARY' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
+                                {inv.location}
+                              </span>
+                            </td>
+                            <td className="p-2 font-bold text-slate-900">{inv.quantity} {selectedProductForView.unit || 'units'}</td>
+                            <td className="p-2 font-mono text-slate-700">
+                              {inv.expiry_date ? new Date(inv.expiry_date).toISOString().split('T')[0] : '-'}
+                            </td>
+                            <td className="p-2 text-slate-500">{inv.shelf_location || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-3 text-center text-xs text-slate-400 italic">
+                    No inventory batches registered yet.
+                  </div>
+                )}
+              </div>
+
+              {/* Modal footer */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                 <Button
+                  variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setViewModalOpen(false);
-                    openEditModal(selectedProductForView);
-                  }}
+                  onClick={() => setViewModalOpen(false)}
                   className="text-xs"
                 >
-                  <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit Product & Expiration
+                  Close
                 </Button>
-              )}
+                {canEditProducts && (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setViewModalOpen(false);
+                      openEditModal(selectedProductForView);
+                    }}
+                    className="text-xs"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit Product
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* ========================================================================= */}

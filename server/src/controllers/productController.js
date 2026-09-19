@@ -1,6 +1,22 @@
 const prisma = require('../config/database');
 const { PAGINATION } = require('../config/constants');
 
+// Auto-generate standard numerical barcode (e.g., 12-digit code starting with 890)
+const generateBarcode = () => {
+  const prefix = '890';
+  const timestamp = Date.now().toString().slice(-6);
+  const random = Math.floor(100 + Math.random() * 900);
+  return `${prefix}${timestamp}${random}`;
+};
+
+// Auto-generate SKU (e.g. MED-AMX-4821 or COS-NIV-1928)
+const generateSku = (productType = 'MEDICINE', name = '') => {
+  const prefix = (productType || '').toUpperCase() === 'COSMETIC' ? 'COS' : 'MED';
+  const cleanName = (name || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'ITM';
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  return `${prefix}-${cleanName}-${randomSuffix}`;
+};
+
 // GET /api/v1/products
 const getProducts = async (req, res, next) => {
   try {
@@ -21,6 +37,7 @@ const getProducts = async (req, res, next) => {
         { name_am: { contains: search, mode: 'insensitive' } },
         { generic_name: { contains: search, mode: 'insensitive' } },
         { barcode: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: 'insensitive' } },
         { brand: { contains: search, mode: 'insensitive' } },
       ];
     }
@@ -123,60 +140,122 @@ const createProduct = async (req, res, next) => {
     const {
       name, name_am, generic_name, category_id, product_type,
       dosage_form, strength, brand, manufacturer, unit_price,
-      reorder_level, requires_prescription, barcode, description,
-      expiry_date, batch_number, initial_quantity, initial_location,
+      reorder_level, requires_prescription, barcode, sku, unit, description,
+      expiry_date, batch_number, initial_quantity, quantity, initial_location,
     } = req.body;
 
-    if (!name || !product_type || unit_price === undefined) {
+    const missingFields = [];
+    if (!name || !name.trim()) missingFields.push('Name');
+    if (!product_type || !['MEDICINE', 'COSMETIC'].includes(product_type.toUpperCase().trim())) {
+      missingFields.push('Product Type (MEDICINE or COSMETIC)');
+    }
+
+    const parsedPrice = parseFloat(unit_price);
+    if (unit_price === undefined || unit_price === null || unit_price === '' || isNaN(parsedPrice) || parsedPrice < 0) {
+      missingFields.push('Unit Price (ETB)');
+    }
+
+    if (requires_prescription === undefined || requires_prescription === null || requires_prescription === '') {
+      missingFields.push('Requires Prescription');
+    }
+
+    if (!expiry_date || !expiry_date.toString().trim()) {
+      missingFields.push('Expiry Date');
+    } else {
+      const parsedDate = new Date(expiry_date);
+      if (isNaN(parsedDate.getTime())) {
+        missingFields.push('Valid Expiry Date (YYYY-MM-DD)');
+      }
+    }
+
+    if (!batch_number || !batch_number.toString().trim()) {
+      missingFields.push('Batch Number');
+    }
+
+    const qtyVal = initial_quantity !== undefined && initial_quantity !== '' ? initial_quantity : quantity;
+    const parsedQty = parseInt(qtyVal);
+    if (qtyVal === undefined || qtyVal === null || qtyVal === '' || isNaN(parsedQty) || parsedQty < 0) {
+      missingFields.push('Quantity');
+    }
+
+    if (!unit || !unit.toString().trim()) {
+      missingFields.push('Unit (bottle, strip, sachet, ampule, etc.)');
+    }
+
+    if (!dosage_form || !dosage_form.toString().trim()) {
+      missingFields.push('Dosage Form');
+    }
+
+    if (!strength || !strength.toString().trim()) {
+      missingFields.push('Strength (e.g., 100mg, 50g)');
+    }
+
+    if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION', message: 'Name, product type, and unit price are required' },
+        error: {
+          code: 'VALIDATION_REQUIRED_FIELDS',
+          message: `All 10 required fields must be filled: ${missingFields.join(', ')}`,
+          missingFields,
+        },
       });
     }
+
+    const finalBarcode = (barcode && barcode.trim()) || generateBarcode();
+    const finalSku = (sku && sku.trim()) || generateSku(product_type, name);
+    const parsedRx = typeof requires_prescription === 'boolean'
+      ? requires_prescription
+      : String(requires_prescription).toLowerCase() === 'true';
 
     const product = await prisma.$transaction(async (tx) => {
       const prod = await tx.product.create({
         data: {
-          name, name_am, generic_name, category_id, product_type,
-          dosage_form, strength, brand, manufacturer,
-          unit_price: parseFloat(unit_price),
-          reorder_level: reorder_level || 10,
-          requires_prescription: requires_prescription || false,
-          barcode, description,
+          name: name.trim(),
+          name_am: name_am ? name_am.trim() : null,
+          generic_name: generic_name ? generic_name.trim() : null,
+          category_id: category_id || null,
+          product_type: product_type.toUpperCase().trim(),
+          dosage_form: dosage_form.trim(),
+          strength: strength.trim(),
+          brand: brand ? brand.trim() : null,
+          manufacturer: manufacturer ? manufacturer.trim() : null,
+          unit_price: parsedPrice,
+          reorder_level: reorder_level ? parseInt(reorder_level) : 10,
+          requires_prescription: parsedRx,
+          barcode: finalBarcode,
+          sku: finalSku,
+          unit: unit.trim(),
+          description: description ? description.trim() : null,
         },
         include: { category: true },
       });
 
-      // If expiry_date, batch_number, or initial quantity is specified, create initial inventory record
-      if (expiry_date || batch_number || initial_quantity !== undefined) {
-        const qty = parseInt(initial_quantity) || 0;
-        const loc = initial_location === 'DISPENSARY' ? 'DISPENSARY' : 'STORE';
-        const inv = await tx.inventory.create({
-          data: {
+      const loc = initial_location === 'DISPENSARY' ? 'DISPENSARY' : 'STORE';
+      const inv = await tx.inventory.create({
+        data: {
+          product_id: prod.id,
+          location: loc,
+          batch_number: batch_number.trim(),
+          expiry_date: new Date(expiry_date),
+          quantity: parsedQty,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          user_id: req.user.id,
+          action: 'ADD_STOCK',
+          entity_type: 'INVENTORY',
+          entity_id: inv.id,
+          details: {
             product_id: prod.id,
             location: loc,
-            batch_number: batch_number || null,
-            expiry_date: expiry_date ? new Date(expiry_date) : null,
-            quantity: qty,
+            expiry_date,
+            batch_number: batch_number.trim(),
+            quantity: parsedQty,
           },
-        });
-
-        await tx.auditLog.create({
-          data: {
-            user_id: req.user.id,
-            action: 'ADD_STOCK',
-            entity_type: 'INVENTORY',
-            entity_id: inv.id,
-            details: {
-              product_id: prod.id,
-              location: loc,
-              expiry_date: expiry_date || null,
-              batch_number: batch_number || null,
-              quantity: qty,
-            },
-          },
-        });
-      }
+        },
+      });
 
       return prod;
     });
@@ -184,7 +263,7 @@ const createProduct = async (req, res, next) => {
     await prisma.auditLog.create({
       data: {
         user_id: req.user.id, action: 'CREATE', entity_type: 'PRODUCT',
-        entity_id: product.id, details: { name: product.name, product_type },
+        entity_id: product.id, details: { name: product.name, product_type, barcode: finalBarcode, sku: finalSku },
       },
     });
 
@@ -206,7 +285,7 @@ const updateProduct = async (req, res, next) => {
     const {
       name, name_am, generic_name, category_id, product_type,
       dosage_form, strength, brand, manufacturer, unit_price,
-      reorder_level, requires_prescription, barcode, description, is_active,
+      reorder_level, requires_prescription, barcode, sku, unit, description, is_active,
       expiry_date, batch_number, inventory_id,
     } = req.body;
 
@@ -225,6 +304,8 @@ const updateProduct = async (req, res, next) => {
       if (reorder_level !== undefined) updateData.reorder_level = parseInt(reorder_level);
       if (requires_prescription !== undefined) updateData.requires_prescription = requires_prescription;
       if (barcode !== undefined) updateData.barcode = barcode;
+      if (sku !== undefined) updateData.sku = sku;
+      if (unit !== undefined) updateData.unit = unit;
       if (description !== undefined) updateData.description = description;
       if (is_active !== undefined) updateData.is_active = is_active;
 
@@ -381,10 +462,12 @@ const getImportTemplate = (req, res) => {
     'Unit_Price_ETB',
     'Reorder_Level',
     'Barcode',
+    'SKU',
     'Requires_Prescription',
     'Expiry_Date',
     'Batch_Number',
     'Quantity',
+    'Unit',
     'Description',
   ];
 
@@ -402,10 +485,12 @@ const getImportTemplate = (req, res) => {
       '18.50',
       '20',
       'MED-AMX-500',
+      'MED-AMX-101',
       'true',
       '2027-08-31',
       'BATCH-AMX-2025',
       '100',
+      'Strip',
       'Broad-spectrum antibiotic for bacterial infections',
     ],
     [
@@ -421,10 +506,12 @@ const getImportTemplate = (req, res) => {
       '5.00',
       '50',
       'MED-PCM-500',
+      'MED-PCM-102',
       'false',
       '2028-01-15',
       'BATCH-PCM-2025',
       '250',
+      'Strip',
       'Analgesic and antipyretic for pain and fever',
     ],
     [
@@ -440,10 +527,12 @@ const getImportTemplate = (req, res) => {
       '350.00',
       '15',
       'COS-NIV-200',
+      'COS-NIV-103',
       'false',
       '2026-12-31',
       'BATCH-NIV-2024',
       '30',
+      'Bottle',
       'Refreshing soft moisturizing cream with Jojoba oil',
     ],
   ];
@@ -500,47 +589,17 @@ const bulkUploadProducts = async (req, res, next) => {
       const rowNum = i + 1;
 
       const rawName = (item.name || item.Name || '').trim();
-      if (!rawName) {
-        results.failedCount++;
-        results.errors.push({ row: rowNum, error: 'Product name is required' });
-        continue;
-      }
-
       const rawType = (item.product_type || item.Product_Type || 'MEDICINE').toUpperCase().trim();
-      const productType = rawType === 'COSMETIC' ? 'COSMETIC' : 'MEDICINE';
-
-      const unitPrice = parseFloat(item.unit_price || item.Unit_Price_ETB);
-      if (isNaN(unitPrice) || unitPrice < 0) {
-        results.failedCount++;
-        results.errors.push({ row: rowNum, error: `Invalid unit price: ${item.unit_price || item.Unit_Price_ETB}` });
-        continue;
-      }
-
-      const catName = (item.category || item.Category || '').toLowerCase().trim();
-      let categoryId = categoryMap.get(catName);
-
-      if (!categoryId) {
-        const fallbackCat = categories.find((c) => c.type === productType);
-        categoryId = fallbackCat ? fallbackCat.id : null;
-      }
-
-      const reorderLevel = parseInt(item.reorder_level || item.Reorder_Level) || 10;
-      const requiresRx = String(item.requires_prescription || item.Requires_Prescription).toLowerCase() === 'true';
-
-      const rawBarcode = (item.barcode || item.Barcode || '').trim();
-      const rawStrength = (item.strength || item.Strength || '').trim();
-      const rawDosageForm = (item.dosage_form || item.Dosage_Form || '').trim();
-      const expiryRaw = (item.expiry_date || item.Expiry_Date || '').toString().trim();
-      const batchRaw = (item.batch_number || item.Batch_Number || '').toString().trim();
-      const qtyRaw = parseInt(item.quantity || item.Quantity || item.initial_quantity) || 0;
-
-      let parsedExpiry = null;
-      if (expiryRaw) {
-        const parsed = new Date(expiryRaw);
-        if (!isNaN(parsed.getTime())) {
-          parsedExpiry = parsed;
-        }
-      }
+      const rawPriceVal = item.unit_price !== undefined ? item.unit_price : (item.Unit_Price_ETB !== undefined ? item.Unit_Price_ETB : (item.unit_price_etb !== undefined ? item.unit_price_etb : item['Unit Price']));
+      const rawRxVal = item.requires_prescription !== undefined ? item.requires_prescription : (item.Requires_Prescription !== undefined ? item.Requires_Prescription : item.requires_rx);
+      const expiryRaw = (item.expiry_date || item.Expiry_Date || item['Expiry Date'] || '').toString().trim();
+      const batchRaw = (item.batch_number || item.Batch_Number || item['Batch Number'] || '').toString().trim();
+      const qtyRawStr = item.quantity !== undefined ? item.quantity : (item.Quantity !== undefined ? item.Quantity : (item.initial_quantity !== undefined ? item.initial_quantity : item['Qty']));
+      const rawUnit = (item.unit || item.Unit || item['Unit(bottle, stp, sachets, ampule)'] || item['Packaging Unit'] || '').toString().trim();
+      const rawDosageForm = (item.dosage_form || item.Dosage_Form || item['Dosage Form'] || '').toString().trim();
+      const rawStrength = (item.strength || item.Strength || '').toString().trim();
+      const rawBarcode = (item.barcode || item.Barcode || '').toString().trim();
+      const rawSku = (item.sku || item.SKU || '').toString().trim();
 
       const nameLookupKey = rawName.toLowerCase();
       const compositeKey = `${nameLookupKey}|${rawStrength.toLowerCase()}|${rawDosageForm.toLowerCase()}`;
@@ -586,7 +645,79 @@ const bulkUploadProducts = async (req, res, next) => {
           }
         }
 
-        // ── 2. Handle Case: Product Already Exists ──
+        // Determine effective values (reusing existing catalog values if row omitted non-batch metadata)
+        const effectiveType = rawType || (existingProduct ? existingProduct.product_type : 'MEDICINE');
+        const effectiveDosageForm = rawDosageForm || (existingProduct ? existingProduct.dosage_form : '') || '';
+        const effectiveStrength = rawStrength || (existingProduct ? existingProduct.strength : '') || '';
+        const effectiveUnit = rawUnit || (existingProduct ? existingProduct.unit : '') || '';
+        const effectiveRx = rawRxVal !== undefined && rawRxVal !== '' ? rawRxVal : (existingProduct ? existingProduct.requires_prescription : true);
+
+        // ── 2. Validate all 10 required fields ──
+        const missingRowFields = [];
+        if (!rawName) missingRowFields.push('Name');
+        if (!effectiveType || !['MEDICINE', 'COSMETIC'].includes(effectiveType)) {
+          missingRowFields.push('Product Type (MEDICINE or COSMETIC)');
+        }
+
+        const priceCandidate = rawPriceVal !== undefined && rawPriceVal !== '' ? rawPriceVal : (existingProduct ? existingProduct.unit_price : NaN);
+        const unitPrice = parseFloat(priceCandidate);
+        if (priceCandidate === undefined || priceCandidate === null || isNaN(unitPrice) || unitPrice < 0) {
+          missingRowFields.push('Unit Price (ETB)');
+        }
+
+        if (effectiveRx === undefined || effectiveRx === null || effectiveRx === '') {
+          missingRowFields.push('Requires Prescription');
+        }
+
+        let parsedExpiry = null;
+        if (!expiryRaw) {
+          missingRowFields.push('Expiry Date');
+        } else {
+          const parsed = new Date(expiryRaw);
+          if (isNaN(parsed.getTime())) {
+            missingRowFields.push('Valid Expiry Date (YYYY-MM-DD)');
+          } else {
+            parsedExpiry = parsed;
+          }
+        }
+
+        if (!batchRaw) missingRowFields.push('Batch Number');
+
+        const qtyParsed = parseInt(qtyRawStr);
+        if (qtyRawStr === undefined || qtyRawStr === null || qtyRawStr === '' || isNaN(qtyParsed) || qtyParsed < 0) {
+          missingRowFields.push('Quantity');
+        }
+
+        if (!effectiveUnit) missingRowFields.push('Unit (bottle, strip, sachet, ampule, etc.)');
+        if (!effectiveDosageForm) missingRowFields.push('Dosage Form');
+        if (!effectiveStrength) missingRowFields.push('Strength (e.g., 100mg, 50g)');
+
+        if (missingRowFields.length > 0) {
+          results.failedCount++;
+          results.errors.push({
+            row: rowNum,
+            name: rawName || 'Unnamed',
+            error: `Row ${rowNum} ("${rawName || 'Unnamed'}") missing required fields: ${missingRowFields.join(', ')}`,
+            missingFields: missingRowFields,
+          });
+          continue; // Do NOT save product or inventory if required fields are incomplete
+        }
+
+        const productType = effectiveType === 'COSMETIC' ? 'COSMETIC' : 'MEDICINE';
+        const requiresRx = String(effectiveRx).toLowerCase() === 'true';
+        const finalBarcode = rawBarcode || (existingProduct ? existingProduct.barcode : '') || generateBarcode();
+        const finalSku = rawSku || (existingProduct ? existingProduct.sku : '') || generateSku(productType, rawName);
+
+        const catName = (item.category || item.Category || '').toLowerCase().trim();
+        let categoryId = categoryMap.get(catName);
+        if (!categoryId) {
+          const fallbackCat = categories.find((c) => c.type === productType);
+          categoryId = fallbackCat ? fallbackCat.id : null;
+        }
+
+        const reorderLevel = parseInt(item.reorder_level || item.Reorder_Level) || 10;
+
+        // ── 3. Handle Case: Product Already Exists ──
         if (existingProduct) {
           // Register in memory
           processedProducts.set(nameLookupKey, existingProduct);
@@ -595,7 +726,7 @@ const bulkUploadProducts = async (req, res, next) => {
             processedProducts.set(`barcode_${existingProduct.barcode.toLowerCase()}`, existingProduct);
           }
 
-          const batchKey = `${existingProduct.id}__${(batchRaw || 'NO_BATCH').toLowerCase()}`;
+          const batchKey = `${existingProduct.id}__${batchRaw.toLowerCase()}`;
 
           // Check if this batch already exists in inventory (or was processed earlier in this import)
           let batchAlreadyExists = processedBatches.has(batchKey);
@@ -605,7 +736,7 @@ const bulkUploadProducts = async (req, res, next) => {
               where: {
                 product_id: existingProduct.id,
                 location: 'STORE',
-                batch_number: batchRaw ? { equals: batchRaw, mode: 'insensitive' } : null,
+                batch_number: { equals: batchRaw, mode: 'insensitive' },
               },
             });
             if (existingInventory) {
@@ -613,52 +744,52 @@ const bulkUploadProducts = async (req, res, next) => {
             }
           }
 
-          // Case 2A: Exact duplicate (same medicine name AND same batch number)
+          // Case 3A: Exact duplicate (same medicine name AND same batch number)
           if (batchAlreadyExists) {
             results.duplicateCount++;
             results.duplicates.push({
               row: rowNum,
               name: rawName,
-              batch_number: batchRaw || 'None',
-              reason: `Duplicate skipped: Medicine "${rawName}" with batch "${batchRaw || 'None'}" already exists in inventory.`,
+              batch_number: batchRaw,
+              reason: `Duplicate skipped: Medicine "${rawName}" with batch "${batchRaw}" already exists in inventory.`,
             });
             continue;
           }
 
-          // Case 2B: Product exists, but row contains a NEW batch number
-          if (batchRaw || expiryRaw || qtyRaw > 0) {
-            await prisma.inventory.create({
+          // Case 3B: Product exists, row contains a NEW batch number
+          await prisma.inventory.create({
+            data: {
+              product_id: existingProduct.id,
+              location: 'STORE',
+              batch_number: batchRaw,
+              expiry_date: parsedExpiry,
+              quantity: qtyParsed,
+            },
+          });
+          processedBatches.add(batchKey);
+
+          // If unit or sku was missing on existing product, update them
+          if ((!existingProduct.unit && effectiveUnit) || (!existingProduct.sku && finalSku)) {
+            await prisma.product.update({
+              where: { id: existingProduct.id },
               data: {
-                product_id: existingProduct.id,
-                location: 'STORE',
-                batch_number: batchRaw || null,
-                expiry_date: parsedExpiry,
-                quantity: qtyRaw,
+                unit: existingProduct.unit || effectiveUnit,
+                sku: existingProduct.sku || finalSku,
               },
             });
-            processedBatches.add(batchKey);
-
-            results.updatedCount++;
-            results.successCount++;
-            results.updated.push({
-              id: existingProduct.id,
-              name: existingProduct.name,
-              batch_number: batchRaw || null,
-            });
-          } else {
-            // Product exists, no batch info provided — prevent creating duplicate product shell
-            results.duplicateCount++;
-            results.duplicates.push({
-              row: rowNum,
-              name: rawName,
-              batch_number: 'N/A',
-              reason: `Duplicate skipped: Medicine "${rawName}" already exists in product catalog.`,
-            });
           }
+
+          results.updatedCount++;
+          results.successCount++;
+          results.updated.push({
+            id: existingProduct.id,
+            name: existingProduct.name,
+            batch_number: batchRaw,
+          });
           continue;
         }
 
-        // ── 3. Handle Case: Completely New Product ──
+        // ── 4. Handle Case: Completely New Product ──
         const created = await prisma.product.create({
           data: {
             name: rawName,
@@ -666,14 +797,16 @@ const bulkUploadProducts = async (req, res, next) => {
             generic_name: item.generic_name || item.Generic_Name || null,
             category_id: categoryId,
             product_type: productType,
-            dosage_form: rawDosageForm || null,
-            strength: rawStrength || null,
+            dosage_form: effectiveDosageForm,
+            strength: effectiveStrength,
             brand: item.brand || item.Brand || null,
             manufacturer: item.manufacturer || item.Manufacturer || null,
             unit_price: unitPrice,
             reorder_level: reorderLevel,
             requires_prescription: requiresRx,
-            barcode: rawBarcode || null,
+            barcode: finalBarcode,
+            sku: finalSku,
+            unit: effectiveUnit,
             description: item.description || item.Description || null,
           },
         });
@@ -685,24 +818,22 @@ const bulkUploadProducts = async (req, res, next) => {
           processedProducts.set(`barcode_${created.barcode.toLowerCase()}`, created);
         }
 
-        const batchKey = `${created.id}__${(batchRaw || 'NO_BATCH').toLowerCase()}`;
+        const batchKey = `${created.id}__${batchRaw.toLowerCase()}`;
 
-        if (expiryRaw || batchRaw || qtyRaw > 0) {
-          await prisma.inventory.create({
-            data: {
-              product_id: created.id,
-              location: 'STORE',
-              batch_number: batchRaw || null,
-              expiry_date: parsedExpiry,
-              quantity: qtyRaw,
-            },
-          });
-          processedBatches.add(batchKey);
-        }
+        await prisma.inventory.create({
+          data: {
+            product_id: created.id,
+            location: 'STORE',
+            batch_number: batchRaw,
+            expiry_date: parsedExpiry,
+            quantity: qtyParsed,
+          },
+        });
+        processedBatches.add(batchKey);
 
         results.createdCount++;
         results.successCount++;
-        results.created.push({ id: created.id, name: created.name, batch_number: batchRaw || null });
+        results.created.push({ id: created.id, name: created.name, batch_number: batchRaw });
       } catch (err) {
         results.failedCount++;
         results.errors.push({ row: rowNum, error: err.message });

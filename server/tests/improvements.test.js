@@ -187,6 +187,9 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
               reorder_level: 20,
               dosage_form: 'Tablet',
               strength: '250mg',
+              unit: 'Strip',
+              requires_prescription: true,
+              expiry_date: '2027-08-31',
               batch_number: 'BATCH-AZI-001',
               quantity: 100,
             },
@@ -197,6 +200,11 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
               category: 'Skincare',
               unit_price: 95.00,
               reorder_level: 15,
+              dosage_form: 'Ointment',
+              strength: '100g',
+              unit: 'Jar',
+              requires_prescription: false,
+              expiry_date: '2026-12-31',
               batch_number: 'BATCH-VAS-001',
               quantity: 50,
             },
@@ -222,6 +230,11 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
               name: 'Azithromycin 250mg',
               unit_price: 45.00,
               product_type: 'MEDICINE',
+              dosage_form: 'Tablet',
+              strength: '250mg',
+              unit: 'Strip',
+              requires_prescription: true,
+              expiry_date: '2027-08-31',
               batch_number: 'BATCH-AZI-001',
               quantity: 50,
             },
@@ -253,6 +266,11 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
               name: 'Azithromycin 250mg',
               unit_price: 45.00,
               product_type: 'MEDICINE',
+              dosage_form: 'Tablet',
+              strength: '250mg',
+              unit: 'Strip',
+              requires_prescription: true,
+              expiry_date: '2028-03-31',
               batch_number: 'BATCH-AZI-002',
               quantity: 75,
             },
@@ -329,6 +347,10 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
           product_type: 'MEDICINE',
           unit_price: 32.50,
           reorder_level: 15,
+          dosage_form: 'Tablet',
+          strength: '500mg',
+          unit: 'Strip',
+          requires_prescription: true,
           expiry_date: '2027-12-31',
           batch_number: 'CIPRO-2025-01',
           initial_quantity: 40,
@@ -351,8 +373,13 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
           name: 'Glycerin Skin Lotion',
           product_type: 'COSMETIC',
           unit_price: 150.00,
+          dosage_form: 'Lotion',
+          strength: '200ml',
+          unit: 'Bottle',
+          requires_prescription: false,
           expiry_date: '2026-06-30',
           batch_number: 'GLY-01',
+          initial_quantity: 20,
         });
 
       expect(createRes.statusCode).toBe(201);
@@ -377,6 +404,82 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(verifyRes.statusCode).toBe(200);
       expect(verifyRes.body.data.inventory[0].expiry_date).toContain('2028-09-30');
       expect(verifyRes.body.data.inventory[0].batch_number).toBe('GLY-01-REVISED');
+    });
+
+    it('Rejects product creation if any of the 10 required fields is missing', async () => {
+      // Incomplete payload missing unit, dosage_form, and strength
+      const res = await request(app)
+        .post('/api/v1/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Incomplete Medicine',
+          product_type: 'MEDICINE',
+          unit_price: 50.0,
+          requires_prescription: true,
+          expiry_date: '2027-12-31',
+          batch_number: 'INC-001',
+          initial_quantity: 10,
+          // Missing unit, dosage_form, strength
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('VALIDATION_REQUIRED_FIELDS');
+      expect(res.body.error.missingFields).toContain('Unit (bottle, strip, sachet, ampule, etc.)');
+      expect(res.body.error.missingFields).toContain('Dosage Form');
+      expect(res.body.error.missingFields).toContain('Strength (e.g., 100mg, 50g)');
+    });
+
+    it('Auto-generates standard Barcode and SKU when omitted during product creation', async () => {
+      const res = await request(app)
+        .post('/api/v1/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Auto Barcode Ampicillin',
+          product_type: 'MEDICINE',
+          unit_price: 30.00,
+          requires_prescription: true,
+          expiry_date: '2028-06-30',
+          batch_number: 'AMP-AUTO-01',
+          initial_quantity: 25,
+          unit: 'Vial',
+          dosage_form: 'Injection',
+          strength: '500mg',
+          // barcode and sku omitted
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.barcode).toBeDefined();
+      expect(res.body.data.barcode).toMatch(/^890/);
+      expect(res.body.data.sku).toBeDefined();
+      expect(res.body.data.sku).toMatch(/^MED-AUT-/);
+      expect(res.body.data.unit).toBe('Vial');
+    });
+
+    it('Rejects bulk import row if required fields are missing and reports exact missing fields', async () => {
+      const res = await request(app)
+        .post('/api/v1/products/bulk-upload')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          products: [
+            {
+              name: 'Incomplete Bulk Medicine',
+              product_type: 'MEDICINE',
+              unit_price: 20.0,
+              // missing requires_prescription, expiry_date, batch_number, quantity, unit, dosage_form, strength
+            },
+          ],
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.failedCount).toBe(1);
+      expect(res.body.data.successCount).toBe(0);
+      expect(res.body.data.errors.length).toBe(1);
+      expect(res.body.data.errors[0].missingFields).toContain('Expiry Date');
+      expect(res.body.data.errors[0].missingFields).toContain('Batch Number');
+      expect(res.body.data.errors[0].missingFields).toContain('Quantity');
+      expect(res.body.data.errors[0].missingFields).toContain('Unit (bottle, strip, sachet, ampule, etc.)');
     });
 
     it('Updates expiration date directly on inventory record via /api/v1/inventory/:id', async () => {

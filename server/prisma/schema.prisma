@@ -139,6 +139,8 @@ model Product {
   reorder_level         Int         @default(10)
   requires_prescription Boolean     @default(false)
   barcode               String?     @db.VarChar(100)
+  sku                   String?     @db.VarChar(100)
+  unit                  String?     @db.VarChar(50)
   description           String?     @db.Text
   is_active             Boolean     @default(true)
   created_at            DateTime    @default(now()) @db.Timestamptz
