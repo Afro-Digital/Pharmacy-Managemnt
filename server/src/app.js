@@ -21,6 +21,7 @@ const settingsRoutes = require('./routes/settingsRoutes');
 const reconciliationRoutes = require('./routes/reconciliationRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const shiftRoutes = require('./routes/shiftRoutes');
+const dangerZoneRoutes = require('./routes/dangerZoneRoutes');
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use('/api/v1/settings', settingsRoutes);
 app.use('/api/v1/reconciliation', reconciliationRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/shifts', shiftRoutes);
+app.use('/api/v1/danger-zone', dangerZoneRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

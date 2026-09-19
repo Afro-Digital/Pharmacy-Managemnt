@@ -23,6 +23,8 @@ import {
   AlertCircle,
   AlertTriangle,
   RefreshCw,
+  ShieldAlert,
+  Lock,
   Check,
   Eye,
   Calendar,
@@ -59,6 +61,11 @@ export const ProductsPage = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
   const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
+  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
+  const [deleteAllPassword, setDeleteAllPassword] = useState('');
+  const [deleteAllConfirmPhrase, setDeleteAllConfirmPhrase] = useState('');
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState(null);
   const fileInputRef = useRef(null);
 
   const formatExpiryForInput = (dateStr) => {
@@ -369,6 +376,37 @@ export const ProductsPage = () => {
     }
   };
 
+  const handleDeleteAllProducts = async (e) => {
+    e.preventDefault();
+    if (deleteAllConfirmPhrase.trim().toUpperCase() !== 'DELETE ALL PRODUCTS') {
+      setDeleteAllError('Please type "DELETE ALL PRODUCTS" exactly to confirm.');
+      return;
+    }
+    if (!deleteAllPassword) {
+      setDeleteAllError('Administrator password is required.');
+      return;
+    }
+    setDeleteAllLoading(true);
+    setDeleteAllError(null);
+    try {
+      const res = await api.post('/danger-zone/delete-all-products', {
+        password: deleteAllPassword,
+        confirmPhrase: 'DELETE ALL PRODUCTS',
+      });
+      if (res.data.success) {
+        setSuccessMessage(res.data.message);
+        setDeleteAllModalOpen(false);
+        setDeleteAllPassword('');
+        setDeleteAllConfirmPhrase('');
+        fetchProducts();
+      }
+    } catch (err) {
+      setDeleteAllError(err.response?.data?.error?.message || 'Failed to delete all products');
+    } finally {
+      setDeleteAllLoading(false);
+    }
+  };
+
   const columns = [
     {
       header: t('products.name'),
@@ -540,16 +578,30 @@ export const ProductsPage = () => {
           </p>
         </div>
         {canEditProducts && (
-          <div className="flex items-center space-x-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteAllModalOpen(true);
+                setDeleteAllConfirmPhrase('');
+                setDeleteAllPassword('');
+                setDeleteAllError(null);
+              }}
+              className="text-xs font-bold px-3 py-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+              title="Danger Zone: Delete all products and inventory"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-500" />
+              Delete All
+            </Button>
             <Button
               variant="outline"
               onClick={handleCleanupDuplicates}
               disabled={isCleaningDuplicates}
-              className="text-xs font-bold px-3 py-2.5 text-slate-600 hover:text-slate-900 border-slate-200"
+              className="text-xs font-bold px-3 py-2 text-slate-600 hover:text-slate-900 border-slate-200"
               title="Merge duplicate products with identical names"
             >
               <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isCleaningDuplicates ? 'animate-spin' : ''}`} />
-              Deduplicate Catalog
+              Deduplicate
             </Button>
             <Button
               variant="secondary"
@@ -559,12 +611,12 @@ export const ProductsPage = () => {
                 setImportSummary(null);
                 setBulkModalOpen(true);
               }}
-              className="text-xs font-bold px-4 py-2.5"
+              className="text-xs font-bold px-3.5 py-2"
             >
               <Upload className="w-3.5 h-3.5 mr-1.5" />
               Bulk Import CSV
             </Button>
-            <Button onClick={openAddModal} className="text-xs font-bold px-4 py-2.5 shadow-xs">
+            <Button onClick={openAddModal} className="text-xs font-bold px-4 py-2 shadow-xs">
               <Plus className="w-4 h-4 mr-1.5" />
               {t('products.add_new')}
             </Button>
@@ -1215,6 +1267,86 @@ export const ProductsPage = () => {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* Danger Zone: Delete All Products Modal                                    */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={deleteAllModalOpen}
+        onClose={() => setDeleteAllModalOpen(false)}
+        title="Danger Zone: Delete All Products"
+        maxWidth="max-w-lg"
+      >
+        <form onSubmit={handleDeleteAllProducts} className="space-y-4">
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 text-xs flex items-start space-x-2.5">
+            <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-rose-950">Irreversible Catalog Wipe</p>
+              <p className="mt-1 leading-relaxed">
+                This will permanently delete ALL product definitions, stock batches in Store & Dispensary, and transfer logs. Categories and sales ledgers will be preserved.
+              </p>
+            </div>
+          </div>
+
+          {deleteAllError && (
+            <Alert variant="error" onClose={() => setDeleteAllError(null)}>
+              {deleteAllError}
+            </Alert>
+          )}
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-700 block">
+              1. Type confirmation phrase <strong className="font-mono text-rose-700">"DELETE ALL PRODUCTS"</strong>:
+            </label>
+            <Input
+              value={deleteAllConfirmPhrase}
+              onChange={(e) => setDeleteAllConfirmPhrase(e.target.value)}
+              placeholder="DELETE ALL PRODUCTS"
+              required
+              autoFocus
+              className="font-mono text-xs"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-700 block">
+              2. Enter your Administrator Account Password:
+            </label>
+            <Input
+              type="password"
+              value={deleteAllPassword}
+              onChange={(e) => setDeleteAllPassword(e.target.value)}
+              placeholder="••••••••••••"
+              required
+            />
+          </div>
+
+          <div className="pt-2 flex items-center justify-end space-x-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteAllModalOpen(false)}
+              disabled={deleteAllLoading}
+              className="text-xs font-bold"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              isLoading={deleteAllLoading}
+              disabled={
+                deleteAllLoading ||
+                deleteAllConfirmPhrase.trim().toUpperCase() !== 'DELETE ALL PRODUCTS' ||
+                !deleteAllPassword
+              }
+              className="bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold px-5"
+            >
+              <Lock className="w-3.5 h-3.5 mr-1.5" />
+              Authorize & Delete All
+            </Button>
+          </div>
+        </form>
       </Modal>
     </div>
   );
