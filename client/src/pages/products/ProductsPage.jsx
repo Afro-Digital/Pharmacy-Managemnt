@@ -469,7 +469,7 @@ export const ProductsPage = () => {
       header: t('products.name'),
       accessor: 'name',
       render: (row) => (
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-3 min-w-[200px]">
           <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200/60 flex items-center justify-center text-slate-600 flex-shrink-0">
             {row.product_type === 'COSMETIC' ? (
               <Package className="w-4 h-4 text-purple-600" />
@@ -478,15 +478,37 @@ export const ProductsPage = () => {
             )}
           </div>
           <div>
-            <div className="font-bold text-slate-900 text-sm">{row.name}</div>
-            {row.name_am ? (
-              <div className="text-[11px] text-slate-400 font-ethiopic">{row.name_am}</div>
-            ) : (
-              <div className="text-[11px] text-slate-400 font-medium">
-                {row.generic_name || row.brand || 'General Product'}
-              </div>
+            <div className="font-bold text-slate-900 text-sm leading-tight">{row.name}</div>
+            {row.name_am && (
+              <div className="text-[11px] text-slate-500 font-ethiopic mt-0.5">{row.name_am}</div>
+            )}
+            <div className="text-[11px] text-slate-400 font-medium truncate max-w-[220px] mt-0.5">
+              {row.generic_name && <span>{row.generic_name}</span>}
+              {row.brand && <span className="text-slate-600 font-semibold ml-1">({row.brand})</span>}
+              {row.manufacturer && !row.brand && <span className="text-slate-400 ml-1">· {row.manufacturer}</span>}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      header: 'Form & Strength',
+      accessor: 'dosage_form',
+      render: (row) => (
+        <div className="flex flex-col items-start gap-1 min-w-[120px]">
+          <div className="text-xs font-bold text-slate-800">
+            {row.dosage_form || '—'}
+            {row.strength && (
+              <span className="ml-1 text-[#5345E6] font-semibold">({row.strength})</span>
             )}
           </div>
+          {row.unit ? (
+            <span className="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200/60 text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+              {row.unit}
+            </span>
+          ) : (
+            <span className="text-[11px] text-slate-400">—</span>
+          )}
         </div>
       ),
     },
@@ -494,57 +516,86 @@ export const ProductsPage = () => {
       header: t('products.type'),
       accessor: 'product_type',
       render: (row) => (
-        <Badge variant={row.product_type === 'MEDICINE' ? 'primary' : 'info'}>
-          {t(`products.${row.product_type.toLowerCase()}`)}
-        </Badge>
-      ),
-    },
-    {
-      header: t('products.category'),
-      accessor: 'category',
-      render: (row) => (
-        <span className="text-xs font-semibold text-slate-600">
-          {row.category?.name || '—'}
-        </span>
+        <div className="flex flex-col items-start gap-1">
+          <Badge variant={row.product_type === 'MEDICINE' ? 'primary' : 'info'}>
+            {t(`products.${row.product_type?.toLowerCase() || 'medicine'}`)}
+          </Badge>
+          <span className="text-[11px] font-semibold text-slate-500">
+            {row.category?.name || '—'}
+          </span>
+        </div>
       ),
     },
     {
       header: t('products.unit_price'),
       accessor: 'unit_price',
       render: (row) => (
-        <span className="font-bold text-slate-900">
-          ETB {parseFloat(row.unit_price).toFixed(2)}
-        </span>
+        <div className="flex flex-col">
+          <span className="font-bold text-slate-900 text-sm">
+            ETB {parseFloat(row.unit_price || 0).toFixed(2)}
+          </span>
+          <span className="text-[10px] text-slate-400">per {row.unit || 'unit'}</span>
+        </div>
       ),
     },
     {
-      header: t('products.reorder_level'),
-      accessor: 'reorder_level',
-      render: (row) => (
-        <span className="font-mono text-xs text-slate-500 font-medium">
-          {row.reorder_level} units
-        </span>
-      ),
+      header: 'Stock & Qty',
+      accessor: 'stock',
+      render: (row) => {
+        const batches = row.inventory || [];
+        const totalStock = batches.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+        const storeStock = batches.filter((i) => i.location === 'STORE').reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+        const dispStock = batches.filter((i) => i.location === 'DISPENSARY').reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+        const reorder = row.reorder_level || 0;
+
+        let statusVariant = 'success';
+        let statusLabel = 'In Stock';
+        if (totalStock === 0) {
+          statusVariant = 'danger';
+          statusLabel = 'Out of Stock';
+        } else if (totalStock <= reorder) {
+          statusVariant = 'warning';
+          statusLabel = `Low (${reorder} min)`;
+        }
+
+        return (
+          <div className="flex flex-col items-start gap-1 min-w-[120px]">
+            <div className="flex items-center space-x-1.5">
+              <span className="font-bold text-slate-900 text-sm">
+                {totalStock}
+              </span>
+              <span className="text-xs text-slate-500 font-medium">
+                {row.unit || 'units'}
+              </span>
+              <Badge variant={statusVariant} className="text-[10px] py-0 px-1.5">
+                {statusLabel}
+              </Badge>
+            </div>
+            <div className="text-[10px] text-slate-400 font-medium">
+              Store: <strong className="text-slate-600">{storeStock}</strong> · Disp: <strong className="text-slate-600">{dispStock}</strong>
+            </div>
+          </div>
+        );
+      },
     },
     {
-      header: t('products.rx_required'),
-      accessor: 'requires_prescription',
-      render: (row) => (
-        <Badge variant={row.requires_prescription ? 'warning' : 'neutral'}>
-          {row.requires_prescription ? t('common.yes') : t('common.no')}
-        </Badge>
-      ),
-    },
-    {
-      header: 'Expiration Date',
+      header: 'Batch & Expiry',
       accessor: 'expiry_date',
       render: (row) => {
         const batches = row.inventory?.filter((i) => i.expiry_date) || [];
+        const allBatches = row.inventory || [];
+        const primaryBatch = allBatches[0];
+
         if (batches.length === 0) {
           return (
-            <span className="text-xs text-slate-400 font-medium italic">
-              Not Set
-            </span>
+            <div className="flex flex-col items-start gap-0.5">
+              <span className="font-mono text-xs text-slate-700 font-medium">
+                {primaryBatch?.batch_number || '—'}
+              </span>
+              <span className="text-xs text-slate-400 font-medium italic">
+                No Expiry Set
+              </span>
+            </div>
           );
         }
 
@@ -567,16 +618,40 @@ export const ProductsPage = () => {
         }
 
         return (
-          <div className="flex flex-col items-start gap-0.5">
-            <Badge variant={badgeVariant}>{label}</Badge>
-            {batches.length > 1 && (
-              <span className="text-[10px] text-slate-400 font-medium">
-                +{batches.length - 1} other {batches.length - 1 === 1 ? 'batch' : 'batches'}
-              </span>
-            )}
+          <div className="flex flex-col items-start gap-1 min-w-[130px]">
+            <div className="flex items-center space-x-1 font-mono text-xs text-slate-800 font-semibold">
+              <span>{primaryBatch?.batch_number || sorted[0].batch_number || '—'}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Badge variant={badgeVariant} className="text-[10px]">{label}</Badge>
+              {batches.length > 1 && (
+                <span className="text-[10px] text-slate-400 font-medium">
+                  +{batches.length - 1} more
+                </span>
+              )}
+            </div>
           </div>
         );
       },
+    },
+    {
+      header: 'Rx',
+      accessor: 'requires_prescription',
+      render: (row) => (
+        <Badge variant={row.requires_prescription ? 'warning' : 'neutral'} className="text-[10px]">
+          {row.requires_prescription ? 'Rx Required' : 'OTC'}
+        </Badge>
+      ),
+    },
+    {
+      header: 'Barcode / SKU',
+      accessor: 'barcode',
+      render: (row) => (
+        <div className="flex flex-col font-mono text-xs min-w-[110px]">
+          <span className="font-semibold text-slate-800">{row.barcode || '—'}</span>
+          <span className="text-[10px] text-slate-400">{row.sku || '—'}</span>
+        </div>
+      ),
     },
   ];
 
@@ -594,7 +669,7 @@ export const ProductsPage = () => {
           type="button"
           onClick={() => openViewModal(row)}
           className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-[#5345E6] flex items-center justify-center transition-colors"
-          title="View Product Details"
+          title="View Exact Specifications"
         >
           <Eye className="w-3.5 h-3.5" />
         </button>

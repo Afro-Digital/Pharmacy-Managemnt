@@ -3,6 +3,7 @@ const app = require('../src/app');
 const prisma = require('../src/config/database');
 const path = require('path');
 const fs = require('fs');
+const { ensureTestFixtures } = require('./testFixtures');
 
 jest.setTimeout(30000);
 
@@ -13,6 +14,9 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
   let testProductId;
 
   beforeAll(async () => {
+    const fixtures = await ensureTestFixtures();
+    testProductId = fixtures.testProductId;
+
     // Admin login
     const adminLogin = await request(app)
       .post('/api/v1/auth/login')

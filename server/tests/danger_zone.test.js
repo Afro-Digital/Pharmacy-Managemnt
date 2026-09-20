@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../src/app');
 const prisma = require('../src/config/database');
+const { ensureTestFixtures } = require('./testFixtures');
 
 jest.setTimeout(30000);
 
@@ -10,6 +11,7 @@ describe('Admin Danger Zone Feature', () => {
   let cashierToken;
 
   beforeAll(async () => {
+    await ensureTestFixtures();
     // Admin login
     const adminLogin = await request(app)
       .post('/api/v1/auth/login')

@@ -1,5 +1,6 @@
 const request = require('supertest');
 const app = require('../src/app');
+const { ensureTestFixtures } = require('./testFixtures');
 
 describe('Pharmacist-to-Cashier Sales Workflow', () => {
   let pharmacistToken;
@@ -9,6 +10,7 @@ describe('Pharmacist-to-Cashier Sales Workflow', () => {
   let pendingSaleId;
 
   beforeAll(async () => {
+    await ensureTestFixtures();
     // 1. Login Pharmacist
     const pharmaLogin = await request(app)
       .post('/api/v1/auth/login')
