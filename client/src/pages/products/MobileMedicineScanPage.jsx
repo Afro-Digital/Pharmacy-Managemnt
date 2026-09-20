@@ -151,8 +151,9 @@ export const MobileMedicineScanPage = () => {
   // Connection status
   const [connected, setConnected] = useState(false);
   const [sessionData, setSessionData] = useState(null);
+  const [categories, setCategories] = useState([]);
 
-  // Stage 1 State (Barcode)
+  // Stage 1 State (Product Packaging)
   const [stage1File, setStage1File] = useState(null);
   const [stage1Preview, setStage1Preview] = useState(null);
   const [stage1ManualBarcode, setStage1ManualBarcode] = useState('');
@@ -180,6 +181,21 @@ export const MobileMedicineScanPage = () => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
+
+  // Fetch categories on mount for Stage 3 manual dropdown
+  useEffect(() => {
+    const fetchCats = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/categories`);
+        if (res.data?.success && res.data?.data) {
+          setCategories(res.data.data);
+        }
+      } catch (err) {
+        // Silently ignore category fetch error on mobile
+      }
+    };
+    fetchCats();
+  }, []);
 
   // 1. On Mount: Connect to Desktop Session
   useEffect(() => {
@@ -224,9 +240,13 @@ export const MobileMedicineScanPage = () => {
           setSessionData(s);
           if (s.phoneConnected) setConnected(true);
 
-          // If stage 2 is complete, auto-advance to stage 3 if user is on stage 2
-          if (s.stage2?.status === 'COMPLETED' && s.stage1?.status === 'COMPLETED') {
+          // If stage 2 is complete while on stage 2, auto-advance to stage 3
+          if (s.stage2?.status === 'COMPLETED' && currentStage === 2) {
             setStage2Submitted(true);
+            showToast('✓ Batch No. & Expiry Date captured! Moving to Stage 3...');
+            setTimeout(() => {
+              setCurrentStage(3);
+            }, 600);
           }
         }
       } catch (e) {
@@ -238,16 +258,24 @@ export const MobileMedicineScanPage = () => {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, currentStage]);
 
-  // Stage 3 Editable State (for manual adjustment when user is not satisfied with current info)
+  // Stage 3 Comprehensive Editable State (for manual adjustment when user is not satisfied)
   const [stage3EditMode, setStage3EditMode] = useState(false);
   const [stage3Form, setStage3Form] = useState({
     name: '',
+    name_am: '',
+    product_type: 'MEDICINE',
+    category_id: '',
+    requires_prescription: false,
     dosage_form: '',
     strength: '',
-    expiry_date: '',
+    unit: 'strip',
+    generic_name: '',
+    brand: '',
+    manufacturer: '',
     batch_number: '',
+    expiry_date: '',
   });
   const [stage3Saving, setStage3Saving] = useState(false);
 
@@ -255,10 +283,18 @@ export const MobileMedicineScanPage = () => {
     if (sessionData?.productData && !stage3EditMode) {
       setStage3Form({
         name: sessionData.productData.name || '',
+        name_am: sessionData.productData.name_am || '',
+        product_type: sessionData.productData.product_type || 'MEDICINE',
+        category_id: sessionData.productData.category_id || '',
+        requires_prescription: Boolean(sessionData.productData.requires_prescription),
         dosage_form: sessionData.productData.dosage_form || '',
         strength: sessionData.productData.strength || '',
-        expiry_date: normalizeExpiryDateString(sessionData.productData.expiry_date) || sessionData.productData.expiry_date || '',
+        unit: sessionData.productData.unit || 'strip',
+        generic_name: sessionData.productData.generic_name || '',
+        brand: sessionData.productData.brand || '',
+        manufacturer: sessionData.productData.manufacturer || '',
         batch_number: sessionData.productData.batch_number || '',
+        expiry_date: normalizeExpiryDateString(sessionData.productData.expiry_date) || sessionData.productData.expiry_date || '',
       });
     }
   }, [sessionData?.productData, stage3EditMode]);
@@ -283,18 +319,10 @@ export const MobileMedicineScanPage = () => {
     }
   };
 
-  // Handle Stage 1 file selection (Barcode / Packaging)
-  const handleStage1FileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setStage1File(file);
-    setStage1Preview(URL.createObjectURL(file));
-    setErrorMessage(null);
-  };
-
-  // Submit Stage 1 Packaging photo & identify medicine
-  const handleStage1Submit = async () => {
-    if (!stage1File && !stage1ManualBarcode.trim()) {
+  // Submit Stage 1 Packaging photo & auto-advance to Stage 2
+  const handleStage1Submit = async (overrideFile) => {
+    const fileToUpload = overrideFile || stage1File;
+    if (!fileToUpload && !stage1ManualBarcode.trim()) {
       setErrorMessage('Please snap a photo of the medicine box or type the barcode numbers.');
       return;
     }
@@ -304,8 +332,8 @@ export const MobileMedicineScanPage = () => {
 
     try {
       const formData = new FormData();
-      if (stage1File) {
-        formData.append('image', stage1File);
+      if (fileToUpload) {
+        formData.append('image', fileToUpload);
       }
       if (stage1ManualBarcode.trim()) {
         formData.append('barcode', stage1ManualBarcode.trim());
@@ -323,7 +351,13 @@ export const MobileMedicineScanPage = () => {
           stage1: { ...(prev?.stage1 || {}), status: 'COMPLETED' },
         }));
       }
-      showToast('✨ Product name, dosage form & strength extracted!');
+
+      showToast('✨ Stage 1 Complete! Auto-filled product details. Moving to Stage 2...');
+
+      // AUTOMATIC PROGRESSION: Advance to Stage 2 automatically upon scan completion
+      setTimeout(() => {
+        setCurrentStage(2);
+      }, 900);
     } catch (err) {
       const msg = err.response?.data?.error?.message || 'Failed to submit photo. Please try again.';
       setErrorMessage(msg);
@@ -332,18 +366,21 @@ export const MobileMedicineScanPage = () => {
     }
   };
 
-  // Handle Stage 2 file selection (Expiry & Batch)
-  const handleStage2FileChange = (e) => {
+  // Handle Stage 1 file selection (Barcode / Packaging) -> auto-trigger analysis
+  const handleStage1FileChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setStage2File(file);
-    setStage2Preview(URL.createObjectURL(file));
+    setStage1File(file);
+    setStage1Preview(URL.createObjectURL(file));
     setErrorMessage(null);
+    // Auto-trigger scan immediately upon photo capture!
+    handleStage1Submit(file);
   };
 
-  // Submit Stage 2 Expiry/Batch asynchronously
-  const handleStage2Submit = async () => {
-    if (!stage2File) {
+  // Submit Stage 2 Expiry/Batch & auto-advance to Stage 3
+  const handleStage2Submit = async (overrideFile) => {
+    const fileToUpload = overrideFile || stage2File;
+    if (!fileToUpload) {
       setErrorMessage('Please take a clear photo of the expiry date and batch number stamp.');
       return;
     }
@@ -353,7 +390,7 @@ export const MobileMedicineScanPage = () => {
 
     try {
       const formData = new FormData();
-      formData.append('image', stage2File);
+      formData.append('image', fileToUpload);
 
       // Backend returns 202 Accepted immediately
       await axios.post(`${API_BASE}/vision/scan-session/${sessionId}/stage2-expiry`, formData, {
@@ -361,15 +398,29 @@ export const MobileMedicineScanPage = () => {
       });
 
       setStage2Submitted(true);
-      showToast('🚀 Expiry & Batch photo received! Server is processing.');
-      // Transition to Stage 3 Live Sync
-      setCurrentStage(3);
+      showToast('🚀 Expiry & Batch scan submitted! Moving to Stage 3...');
+
+      // AUTOMATIC PROGRESSION: Advance to Stage 3 automatically
+      setTimeout(() => {
+        setCurrentStage(3);
+      }, 700);
     } catch (err) {
       const msg = err.response?.data?.error?.message || 'Failed to upload photo. Please retry.';
       setErrorMessage(msg);
     } finally {
       setStage2Uploading(false);
     }
+  };
+
+  // Handle Stage 2 file selection (Expiry & Batch) -> auto-trigger analysis
+  const handleStage2FileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStage2File(file);
+    setStage2Preview(URL.createObjectURL(file));
+    setErrorMessage(null);
+    // Auto-trigger submission immediately upon photo capture!
+    handleStage2Submit(file);
   };
 
   // Reset to scan another medicine
@@ -641,20 +692,21 @@ export const MobileMedicineScanPage = () => {
                   <span>{errorMessage}</span>
                 </div>
               )}
-              {/* Round 1 AI Extraction Results Card */}
+              {/* Stage 1 AI Extraction Results Card */}
               {stage1Submitted && (productData.name || sessionData?.productData?.name) && (
-                <div className="mt-3 p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl text-slate-900 shadow-sm space-y-2.5">
+                <div className="mt-3 p-3.5 bg-gradient-to-br from-emerald-50 via-teal-50 to-emerald-50 border-2 border-emerald-300 rounded-2xl text-slate-900 shadow-sm space-y-2.5">
                   <div className="flex items-center justify-between pb-1.5 border-b border-emerald-200">
                     <div className="flex items-center gap-1.5 font-extrabold text-xs text-emerald-800">
                       <Sparkles className="w-4 h-4 text-emerald-600" />
-                      <span>Round 1 Photo Details Extracted!</span>
+                      <span>Stage 1 Details Extracted & Auto-Filled!</span>
                     </div>
                     <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-2 py-0.5 rounded-full">
-                      Auto-Filled
+                      10 Fields Ready
                     </span>
                   </div>
 
-                  <div>
+                  {/* 1. Product Name & INN */}
+                  <div className="bg-white/90 p-2.5 rounded-xl border border-emerald-200/80 shadow-xs">
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
                       Product Name *
                     </span>
@@ -662,73 +714,99 @@ export const MobileMedicineScanPage = () => {
                       {productData.name || sessionData?.productData?.name}
                     </p>
                     {(productData.generic_name || sessionData?.productData?.generic_name) && (
-                      <p className="text-[11px] text-slate-600">
-                        INN: {productData.generic_name || sessionData?.productData?.generic_name}
+                      <p className="text-[11px] text-slate-600 font-medium mt-0.5">
+                        <span className="font-semibold text-slate-700">Generic / INN:</span> {productData.generic_name || sessionData?.productData?.generic_name}
                       </p>
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                  {/* 2. Grid of 8 Core Fields */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Product Type *</span>
+                      <span className="font-bold text-slate-800">
+                        {productData.product_type || sessionData?.productData?.product_type || 'Medicine'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Rx Prescription *</span>
+                      <span className={`font-bold ${productData.requires_prescription || sessionData?.productData?.requires_prescription ? 'text-amber-700' : 'text-emerald-700'}`}>
+                        {productData.requires_prescription || sessionData?.productData?.requires_prescription ? 'Yes (Rx Required)' : 'No (OTC / Over The Counter)'}
+                      </span>
+                    </div>
+
                     <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
                       <span className="text-[10px] font-bold text-slate-500 block">Dosage Form *</span>
                       <span className="font-bold text-emerald-900">
-                        {productData.dosage_form || sessionData?.productData?.dosage_form || '—'}
+                        {productData.dosage_form || sessionData?.productData?.dosage_form || 'Tablet'}
                       </span>
                     </div>
+
                     <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
                       <span className="text-[10px] font-bold text-slate-500 block">Strength *</span>
                       <span className="font-bold text-emerald-900">
                         {productData.strength || sessionData?.productData?.strength || '—'}
                       </span>
                     </div>
+
                     <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
-                      <span className="text-[10px] font-bold text-slate-500 block">Expiry Date</span>
-                      <span className="font-mono font-bold text-emerald-900">
-                        {normalizeExpiryDateString(productData.expiry_date || sessionData?.productData?.expiry_date) ||
-                          (productData.expiry_date || sessionData?.productData?.expiry_date ? 'Detected' : <span className="text-slate-400 font-normal italic">Optional (Stage 2)</span>)}
-                      </span>
-                    </div>
-                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
-                      <span className="text-[10px] font-bold text-slate-500 block">Unit</span>
+                      <span className="text-[10px] font-bold text-slate-500 block">Packaging Unit *</span>
                       <span className="font-bold text-slate-800 capitalize">
-                        {productData.unit || sessionData?.productData?.unit || 'Strip'}
+                        {productData.unit || sessionData?.productData?.unit || 'Strip (ካርታ)'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Category</span>
+                      <span className="font-bold text-indigo-900 truncate block">
+                        {categories.find((c) => c.id === (productData.category_id || sessionData?.productData?.category_id))?.name ||
+                          productData.category ||
+                          'Auto-Matched'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Brand</span>
+                      <span className="font-bold text-slate-800 truncate block">
+                        {productData.brand || sessionData?.productData?.brand || '—'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Manufacturer</span>
+                      <span className="font-bold text-slate-800 truncate block">
+                        {productData.manufacturer || sessionData?.productData?.manufacturer || '—'}
                       </span>
                     </div>
                   </div>
 
-                  {/* User choices: Satisfied vs Stage 2 vs Stage 3 */}
-                  <div className="pt-2 space-y-2">
+                  {/* Auto-progression banner */}
+                  <div className="p-2.5 bg-violet-600 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Auto-moving to Stage 2: Expiry & Batch...</span>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setCurrentStage(3)}
-                      className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                      onClick={() => setCurrentStage(2)}
+                      className="bg-white text-violet-900 font-bold px-2 py-0.5 rounded text-[11px] hover:bg-violet-50"
                     >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Satisfied with Info? Finish & Sync to Desktop →</span>
-                    </button>
-
-                    {!(productData.expiry_date || sessionData?.productData?.expiry_date) && (
-                      <button
-                        type="button"
-                        onClick={() => setCurrentStage(2)}
-                        className="w-full py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
-                      >
-                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Stage 2: Snap Expiry & Batch Stamp →</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStage3EditMode(true);
-                        setCurrentStage(3);
-                      }}
-                      className="w-full py-1 text-center text-[11px] font-semibold text-slate-500 hover:text-slate-800"
-                    >
-                      Not satisfied with info? Go to Stage 3 for manual editing →
+                      Next →
                     </button>
                   </div>
+
+                  {/* Manual adjustment link if needed */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStage3EditMode(true);
+                      setCurrentStage(3);
+                    }}
+                    className="w-full py-1 text-center text-[11px] font-semibold text-slate-500 hover:text-slate-800"
+                  >
+                    Not satisfied with info? Go to Stage 3 for manual editing →
+                  </button>
                 </div>
               )}
             </div>
@@ -1050,9 +1128,9 @@ export const MobileMedicineScanPage = () => {
                     </button>
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1">
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                      <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
                         Product Name *
                       </label>
                       <input
@@ -1066,7 +1144,57 @@ export const MobileMedicineScanPage = () => {
 
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                          Product Type *
+                        </label>
+                        <select
+                          value={stage3Form.product_type}
+                          onChange={(e) => setStage3Form({ ...stage3Form, product_type: e.target.value })}
+                          className="w-full text-xs font-semibold px-2 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white"
+                        >
+                          <option value="MEDICINE">Medicine</option>
+                          <option value="COSMETIC">Cosmetic</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                          Rx Prescription *
+                        </label>
+                        <select
+                          value={stage3Form.requires_prescription ? 'true' : 'false'}
+                          onChange={(e) => setStage3Form({ ...stage3Form, requires_prescription: e.target.value === 'true' })}
+                          className="w-full text-xs font-semibold px-2 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white"
+                        >
+                          <option value="false">No (OTC)</option>
+                          <option value="true">Yes (Rx Required)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                        Category (Optional)
+                      </label>
+                      <select
+                        value={stage3Form.category_id}
+                        onChange={(e) => setStage3Form({ ...stage3Form, category_id: e.target.value })}
+                        className="w-full text-xs font-semibold px-2 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white"
+                      >
+                        <option value="">Select Category (Optional)</option>
+                        {categories
+                          .filter((c) => !stage3Form.product_type || c.type === stage3Form.product_type)
+                          .map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
                           Dosage Form *
                         </label>
                         <input
@@ -1074,11 +1202,11 @@ export const MobileMedicineScanPage = () => {
                           value={stage3Form.dosage_form}
                           onChange={(e) => setStage3Form({ ...stage3Form, dosage_form: e.target.value })}
                           className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
-                          placeholder="e.g. Capsule, Tablet"
+                          placeholder="e.g. Capsule, Tablet, Syrup"
                         />
                       </div>
                       <div>
-                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
                           Strength *
                         </label>
                         <input
@@ -1093,26 +1221,89 @@ export const MobileMedicineScanPage = () => {
 
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
-                          Expiry Date (yyyy-MM-dd)
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                          Packaging Unit *
+                        </label>
+                        <select
+                          value={stage3Form.unit}
+                          onChange={(e) => setStage3Form({ ...stage3Form, unit: e.target.value })}
+                          className="w-full text-xs font-semibold px-2 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white"
+                        >
+                          <option value="strip">Strip (ካርታ)</option>
+                          <option value="bottle">Bottle (ጠርሙስ)</option>
+                          <option value="sachet">Sachet (ፓኬት)</option>
+                          <option value="ampule">Ampule (አምፑል)</option>
+                          <option value="box">Box (ካርቶን / ሳጥን)</option>
+                          <option value="vial">Vial (ቫያል)</option>
+                          <option value="tube">Tube (ቱቦ)</option>
+                          <option value="tablet">Tablet (ኪኒን)</option>
+                          <option value="jar">Jar (ማሰሮ)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                          Generic / INN Name
                         </label>
                         <input
-                          type="date"
-                          value={stage3Form.expiry_date}
-                          onChange={(e) => setStage3Form({ ...stage3Form, expiry_date: e.target.value })}
-                          className="w-full text-xs font-semibold px-2 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          type="text"
+                          value={stage3Form.generic_name}
+                          onChange={(e) => setStage3Form({ ...stage3Form, generic_name: e.target.value })}
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          placeholder="e.g. Amoxicillin"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                          Brand
+                        </label>
+                        <input
+                          type="text"
+                          value={stage3Form.brand}
+                          onChange={(e) => setStage3Form({ ...stage3Form, brand: e.target.value })}
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          placeholder="e.g. Epharm, Cadila"
                         />
                       </div>
                       <div>
-                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
-                          Batch / Lot No.
+                        <label className="text-[11px] font-bold text-slate-700 block mb-0.5">
+                          Manufacturer
+                        </label>
+                        <input
+                          type="text"
+                          value={stage3Form.manufacturer}
+                          onChange={(e) => setStage3Form({ ...stage3Form, manufacturer: e.target.value })}
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          placeholder="e.g. Cadila Pharma"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200">
+                      <div>
+                        <label className="text-[11px] font-bold text-indigo-900 block mb-0.5">
+                          Batch / Lot No. *
                         </label>
                         <input
                           type="text"
                           value={stage3Form.batch_number}
                           onChange={(e) => setStage3Form({ ...stage3Form, batch_number: e.target.value })}
-                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
                           placeholder="e.g. B.N. 4920"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-emerald-900 block mb-0.5">
+                          Expiry Date (yyyy-MM-dd) *
+                        </label>
+                        <input
+                          type="date"
+                          value={stage3Form.expiry_date}
+                          onChange={(e) => setStage3Form({ ...stage3Form, expiry_date: e.target.value })}
+                          className="w-full text-xs font-semibold px-2 py-1.5 border border-emerald-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
                         />
                       </div>
                     </div>
@@ -1121,7 +1312,7 @@ export const MobileMedicineScanPage = () => {
                       type="button"
                       disabled={stage3Saving}
                       onClick={handleStage3Save}
-                      className="w-full py-2.5 px-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                      className="w-full py-2.5 px-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all mt-2"
                     >
                       {stage3Saving ? (
                         <>
@@ -1138,46 +1329,71 @@ export const MobileMedicineScanPage = () => {
                   </div>
                 </div>
               ) : (
-                <div className="bg-slate-900 text-white rounded-2xl p-3.5 space-y-2 text-xs">
+                <div className="bg-slate-900 text-white rounded-2xl p-3.5 space-y-2.5 text-xs shadow-inner">
                   <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-1.5 text-[11px]">
-                    <span>Live Product Preview</span>
+                    <span className="font-semibold text-slate-300">Live Intake Summary</span>
                     <button
                       type="button"
                       onClick={() => setStage3EditMode(true)}
                       className="flex items-center gap-1 text-[11px] font-bold text-violet-400 hover:text-violet-200"
                     >
                       <Edit3 className="w-3 h-3" />
-                      <span>Edit Info</span>
+                      <span>Edit Fields</span>
                     </button>
                   </div>
 
                   <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Product Name *</span>
                     <p className="text-sm font-bold text-white">
                       {productData.name || 'Awaiting product name...'}
                     </p>
                     {productData.generic_name && (
-                      <p className="text-[11px] text-slate-300">{productData.generic_name}</p>
+                      <p className="text-[11px] text-slate-300 mt-0.5">INN: {productData.generic_name}</p>
                     )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
                     <div>
-                      <span className="text-slate-400 block text-[10px]">Strength:</span>
-                      <span className="font-semibold text-slate-200">{productData.strength || '—'}</span>
+                      <span className="text-slate-400 block text-[10px]">Type / Rx:</span>
+                      <span className="font-semibold text-slate-200">
+                        {productData.product_type || 'Medicine'} · {productData.requires_prescription ? 'Rx' : 'OTC'}
+                      </span>
                     </div>
                     <div>
                       <span className="text-slate-400 block text-[10px]">Dosage Form:</span>
                       <span className="font-semibold text-slate-200">{productData.dosage_form || '—'}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[10px]">Batch Number:</span>
-                      <span className="font-mono font-bold text-indigo-300">
-                        {productData.batch_number || '—'}
+                      <span className="text-slate-400 block text-[10px]">Strength:</span>
+                      <span className="font-semibold text-slate-200">{productData.strength || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Packaging Unit:</span>
+                      <span className="font-semibold text-slate-200 capitalize">{productData.unit || 'Strip'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Brand / Mfr:</span>
+                      <span className="font-semibold text-slate-200 truncate block">
+                        {productData.brand || productData.manufacturer || '—'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[10px]">Expiry Date:</span>
-                      <span className="font-mono font-bold text-emerald-400">
+                      <span className="text-slate-400 block text-[10px]">Category:</span>
+                      <span className="font-semibold text-indigo-300 truncate block">
+                        {categories.find((c) => c.id === (productData.category_id || sessionData?.productData?.category_id))?.name ||
+                          productData.category ||
+                          '—'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-800/80 p-1.5 rounded-lg border border-slate-700">
+                      <span className="text-indigo-300 block text-[10px] font-bold">Batch / Lot No. *</span>
+                      <span className="font-mono font-bold text-white">
+                        {productData.batch_number || '—'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-800/80 p-1.5 rounded-lg border border-slate-700">
+                      <span className="text-emerald-400 block text-[10px] font-bold">Expiry Date *</span>
+                      <span className="font-mono font-bold text-white">
                         {normalizeExpiryDateString(productData.expiry_date) || productData.expiry_date || '—'}
                       </span>
                     </div>

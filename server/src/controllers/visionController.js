@@ -176,39 +176,85 @@ const parseMedicineTitle = (title) => {
   return result;
 };
 
-// The structured prompt sent to Gemini Vision
+// Smart Category Matching Helper: Matches extracted categories and keywords against DB categories
+const matchCategoryId = async (rawCategory, productType = 'MEDICINE') => {
+  if (!rawCategory) return null;
+  const str = String(rawCategory).toLowerCase().trim();
+
+  try {
+    // 1. Direct name match in DB
+    let cat = await prisma.category.findFirst({
+      where: {
+        name: { contains: rawCategory, mode: 'insensitive' },
+        type: productType,
+      },
+    });
+    if (cat) return cat.id;
+
+    // 2. Keyword/synonym aliases mapping to standard pharmacy categories
+    const aliases = [
+      { keys: ['antibiotic', 'antibacterial', 'anti-infective', 'antimicrobial', 'penicillin', 'cephalosporin', 'amoxicillin', 'cipro'], target: 'Antibiotics' },
+      { keys: ['pain', 'analgesic', 'antipyretic', 'nsaid', 'paracetamol', 'ibuprofen', 'headache', 'fever', 'anti-inflammatory', 'aspirin'], target: 'Pain Relief' },
+      { keys: ['cardio', 'heart', 'blood pressure', 'hypertension', 'antihypertensive', 'statin', 'cholesterol', 'amlodipine', 'atenolol'], target: 'Cardiovascular' },
+      { keys: ['vitamin', 'supplement', 'mineral', 'multivitamin', 'calcium', 'iron', 'folic', 'zinc', 'ascorbic'], target: 'Vitamins & Supplements' },
+      { keys: ['respiratory', 'cough', 'cold', 'asthma', 'bronchial', 'allergy', 'antihistamine', 'flu', 'nasal', 'cetirizine', 'salbutamol'], target: 'Respiratory' },
+      { keys: ['gastro', 'stomach', 'digestive', 'antacid', 'ulcer', 'omeprazole', 'laxative', 'diarrhea', 'acid', 'cimetidine', 'pantoprazole'], target: 'Gastrointestinal' },
+      { keys: ['skin', 'dermatolog', 'acne', 'cream', 'ointment', 'lotion', 'antifungal', 'clotrimazole', 'hydrocortisone'], target: 'Skin Care' },
+      { keys: ['hair', 'shampoo', 'conditioner', 'hair loss', 'minoxidil'], target: 'Hair Care' },
+      { keys: ['hygiene', 'soap', 'deodorant', 'oral care', 'toothpaste', 'mouthwash'], target: 'Personal Hygiene' },
+      { keys: ['baby', 'infant', 'pediatric', 'diaper', 'baby lotion', 'gripe water'], target: 'Baby Care' },
+    ];
+
+    for (const a of aliases) {
+      if (a.keys.some((k) => str.includes(k))) {
+        cat = await prisma.category.findFirst({
+          where: { name: { contains: a.target, mode: 'insensitive' } },
+        });
+        if (cat) return cat.id;
+      }
+    }
+  } catch (err) {
+    console.warn('Category lookup error:', err.message);
+  }
+  return null;
+};
+
+// The structured prompt sent to Gemini Vision for Stage 1 Product Packaging Capture
 const EXTRACTION_PROMPT = `You are an expert pharmaceutical computer vision assistant for an Ethiopian pharmacy management system.
 
-Analyze this medicine packaging photo carefully and extract the following fields into a structured JSON object.
+Analyze this medicine packaging photo carefully and extract the following Stage 1 fields into a structured JSON object.
 
-CRITICAL MANDATORY INSTRUCTIONS:
-1. "name": The commercial brand/trade name of the medicine as printed on the packaging (e.g. "Amoxil", "Augmentin", "Cipro 500", "Paracetamol", "Omeprazole", "Ibuprofen").
-2. "dosage_form": The physical pharmaceutical formulation. MUST BE one of: "Tablet", "Capsule", "Caplet", "Syrup", "Suspension", "Injection", "Cream", "Ointment", "Gel", "Drops", "Inhaler", "Powder", "Suppository", "Vial", "Ampule", "Solution", "Lotion". If not written as explicit text, infer it from the visual packaging (e.g. blister pack = "Tablet" or "Capsule", bottle with syrup liquid = "Syrup", tube = "Cream" or "Ointment").
-3. "strength": The active ingredient strength/concentration with unit (e.g. "500mg", "250mg/5ml", "100ml", "1g", "10mg", "50mcg", "1%", "2%"). Look closely near or under the medicine name.
-4. "expiry_date": The expiration date printed on the packaging (e.g. "07 2027", "07/2027", "EXP 08/2026", "2027-07-31", "07-2027"). Extract it if visible anywhere on the packaging.
-5. "generic_name": The active pharmaceutical ingredient / INN name (e.g. "Amoxicillin", "Paracetamol", "Ciprofloxacin").
-6. "batch_number": The lot or batch number if visible (e.g. "B.N. 4920", "LOT 8812").
-7. "brand": The pharmaceutical company brand name if different from generic name.
-8. "manufacturer": The manufacturing company (e.g. "Cadila", "Julphar", "EPHARM", "GSK", "Pfizer").
-9. "barcode": Any barcode number digits if readable near a barcode.
-10. "unit": Inferred packaging unit: "Strip", "Bottle", "Box", "Tube", "Vial", "Sachet", "Ampule".
+STAGE 1 MANDATORY FIELDS TO EXTRACT:
+1. "name": The commercial brand/trade name of the product as printed on the packaging (e.g. "Amoxicillin 500mg", "Augmentin 625mg", "Panadol Extra", "Omeprazole 20mg", "Cipro 500").
+2. "product_type": "MEDICINE" for pharmaceutical drugs or "COSMETIC" for skincare/beauty products. Default to "MEDICINE".
+3. "category": Therapeutic drug class (e.g. "Antibiotics", "Pain Relief", "Cardiovascular", "Vitamins & Supplements", "Respiratory", "Gastrointestinal", "Skin Care").
+4. "requires_prescription": Boolean: true if prescription required (Rx/POM, such as antibiotics, cardiovascular, controlled medicines); false if OTC (Over The Counter, such as paracetamol, antacids, vitamins).
+5. "dosage_form": Pharmaceutical formulation. MUST BE one of: "Tablet", "Capsule", "Caplet", "Syrup", "Suspension", "Injection", "Cream", "Ointment", "Gel", "Drops", "Inhaler", "Powder", "Suppository", "Vial", "Ampule", "Solution", "Lotion". If not explicitly printed, infer from packaging (e.g. blister card = "Tablet" or "Capsule", bottle with liquid = "Syrup", tube = "Cream").
+6. "strength": Active ingredient concentration with unit (e.g. "500mg", "250mg/5ml", "100ml", "1g", "10mg", "50mcg", "1%", "2%").
+7. "unit": Packaging unit in lowercase: "strip", "bottle", "box", "tube", "vial", "sachet", "ampule", "tablet", "jar". Blister cards are "strip". Bottles are "bottle".
+8. "generic_name": The active pharmaceutical ingredient / INN name (e.g. "Amoxicillin", "Paracetamol", "Ciprofloxacin", "Metformin").
+9. "brand": Brand or trademark name (e.g. "Epharm", "Cadila", "GSK", "Sanofi", "Pfizer", "Julphar").
+10. "manufacturer": The manufacturing company (e.g. "Cadila Pharmaceuticals", "Julphar", "EPHARM", "GSK").
+11. "barcode": Barcode digits if visible on the box/bottle, otherwise null.
+12. "batch_number": Batch/Lot number if visible, otherwise null.
+13. "expiry_date": Expiration date if visible, otherwise null.
 
 Return ONLY a valid JSON object with exactly these keys:
 {
   "name": "Full product name",
   "name_am": null,
   "product_type": "MEDICINE",
-  "generic_name": "Generic/INN name",
-  "dosage_form": "Tablet, Capsule, Syrup, etc.",
-  "strength": "Strength with unit",
-  "brand": "Brand name",
-  "manufacturer": "Manufacturer name",
-  "batch_number": "Batch or Lot number",
-  "expiry_date": "Expiry date as printed",
-  "barcode": "Barcode digits or null",
+  "category": "Antibiotics",
   "requires_prescription": false,
-  "unit": "Strip, Bottle, Box, etc.",
-  "category": "Antibiotic, Analgesic, etc.",
+  "dosage_form": "Capsule",
+  "strength": "500mg",
+  "unit": "strip",
+  "generic_name": "Amoxicillin",
+  "brand": "Epharm",
+  "manufacturer": "Epharm",
+  "batch_number": null,
+  "expiry_date": null,
+  "barcode": null,
   "description": "Short description",
   "confidence": 0.95
 }
@@ -379,13 +425,10 @@ const processMedicineImageBuffer = async (buffer, apiKey) => {
   // Try to match category from DB
   let matchedCategoryId = null;
   if (extracted.category) {
-    const cat = await prisma.category.findFirst({
-      where: {
-        name: { contains: extracted.category, mode: 'insensitive' },
-        type: extracted.product_type,
-      },
-    });
-    if (cat) matchedCategoryId = cat.id;
+    matchedCategoryId = await matchCategoryId(extracted.category, extracted.product_type);
+    if (matchedCategoryId) {
+      extracted.category_id = matchedCategoryId;
+    }
   }
 
   return {
@@ -908,23 +951,30 @@ const submitStage1Barcode = async (req, res, next) => {
                 name: ext.name || session.productData.name,
                 name_am: ext.name_am || session.productData.name_am,
                 product_type: ext.product_type || session.productData.product_type,
-                generic_name: ext.generic_name || session.productData.generic_name,
-                dosage_form: ext.dosage_form || session.productData.dosage_form,
-                strength: ext.strength || session.productData.strength,
-                brand: ext.brand || session.productData.brand,
-                manufacturer: ext.manufacturer || session.productData.manufacturer,
-                unit: ext.unit || session.productData.unit,
-                batch_number: ext.batch_number || session.productData.batch_number,
-                expiry_date: ext.expiry_date || session.productData.expiry_date,
+                category_id: res.data.matchedCategoryId || session.productData.category_id,
                 requires_prescription:
                   ext.requires_prescription !== undefined
-                    ? ext.requires_prescription
+                    ? Boolean(ext.requires_prescription)
                     : session.productData.requires_prescription,
-                category_id: res.data.matchedCategoryId || session.productData.category_id,
+                dosage_form: ext.dosage_form || session.productData.dosage_form,
+                strength: ext.strength || session.productData.strength,
+                unit: ext.unit || session.productData.unit,
+                generic_name: ext.generic_name || session.productData.generic_name,
+                brand: ext.brand || session.productData.brand,
+                manufacturer: ext.manufacturer || session.productData.manufacturer,
+                batch_number: ext.batch_number || session.productData.batch_number,
+                expiry_date: ext.expiry_date || session.productData.expiry_date,
               });
               session.fieldSources.name = 'STAGE_1_PACKAGING_SCAN';
+              session.fieldSources.product_type = 'STAGE_1_PACKAGING_SCAN';
+              if (res.data.matchedCategoryId) session.fieldSources.category_id = 'STAGE_1_PACKAGING_SCAN';
+              session.fieldSources.requires_prescription = 'STAGE_1_PACKAGING_SCAN';
               session.fieldSources.dosage_form = 'STAGE_1_PACKAGING_SCAN';
               session.fieldSources.strength = 'STAGE_1_PACKAGING_SCAN';
+              session.fieldSources.unit = 'STAGE_1_PACKAGING_SCAN';
+              if (ext.generic_name) session.fieldSources.generic_name = 'STAGE_1_PACKAGING_SCAN';
+              if (ext.brand) session.fieldSources.brand = 'STAGE_1_PACKAGING_SCAN';
+              if (ext.manufacturer) session.fieldSources.manufacturer = 'STAGE_1_PACKAGING_SCAN';
               if (ext.expiry_date) session.fieldSources.expiry_date = 'STAGE_1_PACKAGING_SCAN';
               if (ext.batch_number) session.fieldSources.batch_number = 'STAGE_1_PACKAGING_SCAN';
             }
@@ -1427,11 +1477,18 @@ const updateScanSessionFields = async (req, res, next) => {
       });
     }
 
-    const allowed = ['name', 'dosage_form', 'strength', 'expiry_date', 'batch_number', 'unit', 'unit_price', 'barcode', 'generic_name'];
+    const allowed = [
+      'name', 'name_am', 'product_type', 'category_id', 'requires_prescription',
+      'dosage_form', 'strength', 'unit', 'generic_name', 'brand', 'manufacturer',
+      'batch_number', 'expiry_date', 'barcode', 'unit_price', 'reorder_level',
+      'initial_quantity', 'initial_location', 'description'
+    ];
     for (const key of allowed) {
       if (req.body[key] !== undefined) {
         if (key === 'expiry_date') {
           session.productData[key] = normalizeExpiryDateString(req.body[key]) || req.body[key];
+        } else if (key === 'requires_prescription') {
+          session.productData[key] = req.body[key] === true || req.body[key] === 'true';
         } else {
           session.productData[key] = req.body[key];
         }

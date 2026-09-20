@@ -231,6 +231,12 @@ export const ProductsPage = () => {
                         updated[k] = norm;
                         changed = true;
                       }
+                    } else if (k === 'requires_prescription') {
+                      const boolVal = v === true || v === 'true';
+                      if (updated[k] !== boolVal) {
+                        updated[k] = boolVal;
+                        changed = true;
+                      }
                     } else if (updated[k] !== v) {
                       updated[k] = v;
                       changed = true;
