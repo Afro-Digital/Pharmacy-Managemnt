@@ -130,7 +130,7 @@ const processMedicineImageBuffer = async (buffer, apiKey) => {
 
   // Call Gemini Vision API
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  const primaryModelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 
   const imagePart = {
     inlineData: {
@@ -139,7 +139,30 @@ const processMedicineImageBuffer = async (buffer, apiKey) => {
     },
   };
 
-  const result = await model.generateContent([EXTRACTION_PROMPT, imagePart]);
+  let result;
+  try {
+    const model = genAI.getGenerativeModel({ model: primaryModelName });
+    result = await model.generateContent([EXTRACTION_PROMPT, imagePart]);
+  } catch (modelErr) {
+    // If the model is not found or deprecated, try alternative versions
+    if (
+      modelErr.message &&
+      (modelErr.message.includes('404') ||
+        modelErr.message.includes('not available') ||
+        modelErr.message.includes('no longer available'))
+    ) {
+      console.warn(`Model ${primaryModelName} not available, attempting fallback:`, modelErr.message);
+      try {
+        const fallback1 = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+        result = await fallback1.generateContent([EXTRACTION_PROMPT, imagePart]);
+      } catch (err2) {
+        const fallback2 = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        result = await fallback2.generateContent([EXTRACTION_PROMPT, imagePart]);
+      }
+    } else {
+      throw modelErr;
+    }
+  }
   const responseText = result.response.text();
 
   // Parse JSON from the response (handle potential markdown code fences)
