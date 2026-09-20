@@ -2520,8 +2520,10 @@ export const ProductsPage = () => {
                         className="mt-3 ml-2 text-xs font-bold px-4 py-2"
                         onClick={() => {
                           setScanModalOpen(false);
-                          setFormData({ ...formData, barcode: scanResult.barcode });
-                          openAddModal();
+                          setEditingProduct(null);
+                          setFormData({ ...initialFormState, barcode: scanResult.barcode || '' });
+                          setErrorMessage(null);
+                          setProductModalOpen(true);
                         }}
                       >
                         <Plus className="w-3.5 h-3.5 mr-1.5" />
@@ -2584,7 +2586,7 @@ export const ProductsPage = () => {
                       onClick={() => {
                         const ext = scanResult.extracted;
                         setFormData({
-                          ...formData,
+                          ...initialFormState,
                           name: ext.name || '',
                           name_am: ext.name_am || '',
                           product_type: ext.product_type || 'MEDICINE',
@@ -2597,13 +2599,14 @@ export const ProductsPage = () => {
                           batch_number: ext.batch_number || '',
                           expiry_date: ext.expiry_date || '',
                           barcode: ext.barcode || '',
-                          requires_prescription: ext.requires_prescription === true ? 'true' : 'false',
-                          unit: ext.unit || '',
+                          requires_prescription: ext.requires_prescription === true,
+                          unit: ext.unit || 'strip',
                           description: ext.description || '',
                           category_id: scanResult.matchedCategoryId || '',
                         });
                         setScanModalOpen(false);
-                        setEditProduct(null);
+                        setEditingProduct(null);
+                        setErrorMessage(null);
                         setProductModalOpen(true);
                       }}
                     >
