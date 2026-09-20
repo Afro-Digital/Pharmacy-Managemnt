@@ -34,7 +34,11 @@ import {
   Sparkles,
   ImageIcon,
   XCircle,
+  Smartphone,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 
 export const ProductsPage = () => {
   const { t } = useTranslation();
@@ -76,14 +80,98 @@ export const ProductsPage = () => {
 
   // Smart Scan state
   const [scanModalOpen, setScanModalOpen] = useState(false);
-  const [scanMode, setScanMode] = useState('barcode'); // 'barcode' | 'photo' | 'result'
+  const [scanMode, setScanMode] = useState('phone'); // 'phone' | 'photo' | 'barcode' | 'result'
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [scanResult, setScanResult] = useState(null);
   const [barcodeScanning, setBarcodeScanning] = useState(false);
   const scannerRef = useRef(null);
-  const photoInputRef = useRef(null);
-  const barcodeContainerRef = useRef(null);
+  const photoCameraInputRef = useRef(null);
+  const photoGalleryInputRef = useRef(null);
+
+  // Phone QR Session state
+  const [phoneSessionId, setPhoneSessionId] = useState(null);
+  const [phoneSessionUrl, setPhoneSessionUrl] = useState('');
+  const [phoneSessionLoading, setPhoneSessionLoading] = useState(false);
+  const [phoneSessionStatus, setPhoneSessionStatus] = useState('PENDING'); // PENDING | ANALYZING | COMPLETED | FAILED
+  const [phoneUrlCopied, setPhoneUrlCopied] = useState(false);
+
+  // Safely stop barcode scanner
+  const stopBarcodeScanner = async () => {
+    if (scannerRef.current) {
+      try {
+        if (scannerRef.current.isScanning) {
+          await scannerRef.current.stop();
+        }
+        await scannerRef.current.clear();
+      } catch (e) {
+        console.warn('Scanner stop warning:', e);
+      }
+      scannerRef.current = null;
+    }
+    setBarcodeScanning(false);
+  };
+
+  // Initialize a phone scan session
+  const initPhoneSession = async () => {
+    setPhoneSessionLoading(true);
+    setScanError(null);
+    try {
+      const res = await api.post('/vision/scan-session');
+      if (res.data.success) {
+        const sid = res.data.data.sessionId;
+        setPhoneSessionId(sid);
+        setPhoneSessionUrl(`${window.location.origin}/medicine-scan/${sid}`);
+        setPhoneSessionStatus('PENDING');
+      }
+    } catch (err) {
+      console.error('Failed to create phone scan session:', err);
+    } finally {
+      setPhoneSessionLoading(false);
+    }
+  };
+
+  // Poll phone session status when in phone mode
+  useEffect(() => {
+    let interval = null;
+    if (
+      scanModalOpen &&
+      scanMode === 'phone' &&
+      phoneSessionId &&
+      (phoneSessionStatus === 'PENDING' || phoneSessionStatus === 'ANALYZING')
+    ) {
+      interval = setInterval(async () => {
+        try {
+          const res = await api.get(`/vision/scan-session/${phoneSessionId}`);
+          if (res.data.success && res.data.data) {
+            const session = res.data.data;
+            if (session.status === 'ANALYZING') {
+              setPhoneSessionStatus('ANALYZING');
+            } else if (session.status === 'COMPLETED' && session.data) {
+              setPhoneSessionStatus('COMPLETED');
+              clearInterval(interval);
+              setScanResult({
+                type: session.data.isNewProduct ? 'new_extracted' : 'existing_extracted',
+                extracted: session.data.extracted,
+                existingProduct: session.data.existingProduct,
+                matchedCategoryId: session.data.matchedCategoryId,
+                message: session.message,
+              });
+              setScanMode('result');
+            } else if (session.status === 'FAILED') {
+              setPhoneSessionStatus('FAILED');
+              setScanError(session.error || 'Failed to analyze medicine packaging from phone.');
+            }
+          }
+        } catch (e) {
+          // ignore polling errors
+        }
+      }, 2000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [scanModalOpen, scanMode, phoneSessionId, phoneSessionStatus]);
 
   // Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, Excel serials, MM/YYYY, textual dates
   const normalizeExpiryDateString = (rawInput) => {
@@ -1004,9 +1092,10 @@ export const ProductsPage = () => {
             <Button
               onClick={() => {
                 setScanModalOpen(true);
-                setScanMode('barcode');
+                setScanMode('phone');
                 setScanError(null);
                 setScanResult(null);
+                initPhoneSession();
               }}
               className="text-xs font-bold px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-xs"
             >
@@ -1915,14 +2004,10 @@ export const ProductsPage = () => {
         isOpen={scanModalOpen}
         onClose={() => {
           setScanModalOpen(false);
-          setScanMode('barcode');
+          setScanMode('phone');
           setScanError(null);
           setScanResult(null);
-          // Stop barcode scanner if running
-          if (scannerRef.current) {
-            try { scannerRef.current.stop().catch(() => {}); } catch (e) {}
-            scannerRef.current = null;
-          }
+          stopBarcodeScanner();
         }}
         title={scanMode === 'result' ? '✅ Extraction Result' : '📷 Smart Scan — Medicine Intake'}
         size="lg"
@@ -1936,21 +2021,30 @@ export const ProductsPage = () => {
 
           {/* Mode Tabs */}
           {scanMode !== 'result' && (
-            <div className="flex gap-2 bg-slate-100 rounded-lg p-1">
+            <div className="flex gap-1.5 bg-slate-100 rounded-xl p-1">
               <button
-                onClick={() => setScanMode('barcode')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-md text-sm font-semibold transition-all ${
-                  scanMode === 'barcode'
+                type="button"
+                onClick={() => {
+                  stopBarcodeScanner();
+                  setScanMode('phone');
+                  if (!phoneSessionId) initPhoneSession();
+                }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
+                  scanMode === 'phone'
                     ? 'bg-white text-violet-700 shadow-sm'
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                <ScanLine className="w-4 h-4" />
-                Scan Barcode
+                <Smartphone className="w-4 h-4" />
+                📱 Scan with Phone
               </button>
               <button
-                onClick={() => setScanMode('photo')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-md text-sm font-semibold transition-all ${
+                type="button"
+                onClick={() => {
+                  stopBarcodeScanner();
+                  setScanMode('photo');
+                }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
                   scanMode === 'photo'
                     ? 'bg-white text-violet-700 shadow-sm'
                     : 'text-slate-500 hover:text-slate-700'
@@ -1959,72 +2053,333 @@ export const ProductsPage = () => {
                 <Camera className="w-4 h-4" />
                 Take Photo
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setScanMode('barcode');
+                }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
+                  scanMode === 'barcode'
+                    ? 'bg-white text-violet-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <ScanLine className="w-4 h-4" />
+                Scan Barcode
+              </button>
             </div>
           )}
 
-          {/* Barcode Scanner Mode */}
+          {/* 1. Phone QR Sync Mode */}
+          {scanMode === 'phone' && (
+            <div className="space-y-4 text-center">
+              <div className="bg-gradient-to-b from-slate-50 to-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-violet-100 text-violet-600 mb-2">
+                  <Smartphone className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900">Scan Packaging with Your Phone</h3>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                  Scan this QR code with any smartphone camera to open the intake camera on your phone—no app download or password needed.
+                </p>
+
+                {/* QR Code Container */}
+                <div className="my-4 inline-block p-4 bg-white border-2 border-violet-100 rounded-2xl shadow-md">
+                  {phoneSessionUrl ? (
+                    <QRCodeSVG
+                      value={phoneSessionUrl}
+                      size={190}
+                      level="H"
+                      includeMargin
+                      className="rounded-lg"
+                    />
+                  ) : (
+                    <div className="w-[190px] h-[190px] flex items-center justify-center bg-slate-100 rounded-lg">
+                      <Loader2 className="w-8 h-8 text-violet-600 animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                {/* Live Polling Status Indicator */}
+                <div className="flex items-center justify-center space-x-2 text-xs font-semibold py-2 px-4 rounded-xl max-w-xs mx-auto transition-all bg-violet-50 text-violet-700 border border-violet-200">
+                  {phoneSessionStatus === 'ANALYZING' ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-600" />
+                      <span>AI is analyzing photo from phone...</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-violet-600 animate-ping" />
+                      <span>Waiting for phone camera capture...</span>
+                    </>
+                  )}
+                </div>
+
+                {/* Direct Link Alternative */}
+                <div className="mt-4 flex items-center justify-center gap-2 max-w-md mx-auto">
+                  <input
+                    type="text"
+                    readOnly
+                    value={phoneSessionUrl}
+                    className="text-[11px] font-mono bg-slate-100 border border-slate-200 text-slate-600 rounded-lg px-3 py-1.5 w-full truncate select-all"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="text-xs shrink-0 py-1.5 px-2.5"
+                    onClick={() => {
+                      navigator.clipboard.writeText(phoneSessionUrl);
+                      setPhoneUrlCopied(true);
+                      setTimeout(() => setPhoneUrlCopied(false), 2000);
+                    }}
+                  >
+                    {phoneUrlCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span className="ml-1">{phoneUrlCopied ? 'Copied' : 'Copy'}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="text-xs shrink-0 py-1.5 px-2.5"
+                    onClick={() => window.open(phoneSessionUrl, '_blank')}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span className="ml-1">Open</span>
+                  </Button>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-400">
+                On a device with a built-in camera? Switch to{' '}
+                <button
+                  type="button"
+                  onClick={() => setScanMode('photo')}
+                  className="text-violet-600 font-semibold underline"
+                >
+                  Take Photo
+                </button>{' '}
+                or{' '}
+                <button
+                  type="button"
+                  onClick={() => setScanMode('barcode')}
+                  className="text-violet-600 font-semibold underline"
+                >
+                  Scan Barcode
+                </button>.
+              </p>
+            </div>
+          )}
+
+          {/* 2. Photo Capture / Upload Mode */}
+          {scanMode === 'photo' && (
+            <div className="space-y-4">
+              <input
+                ref={photoCameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setScanLoading(true);
+                  setScanError(null);
+                  try {
+                    const formData = new FormData();
+                    formData.append('image', file);
+                    const res = await api.post('/vision/extract-product', formData, {
+                      headers: { 'Content-Type': 'multipart/form-data' },
+                      timeout: 35000,
+                    });
+                    setScanResult({
+                      type: res.data.data.isNewProduct ? 'new_extracted' : 'existing_extracted',
+                      extracted: res.data.data.extracted,
+                      existingProduct: res.data.data.existingProduct,
+                      matchedCategoryId: res.data.data.matchedCategoryId,
+                      message: res.data.message,
+                    });
+                    setScanMode('result');
+                  } catch (err) {
+                    const msg = err?.response?.data?.error?.message || err?.message || 'Failed to analyze image';
+                    setScanError(msg);
+                  } finally {
+                    setScanLoading(false);
+                    if (photoCameraInputRef.current) photoCameraInputRef.current.value = '';
+                  }
+                }}
+              />
+              <input
+                ref={photoGalleryInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setScanLoading(true);
+                  setScanError(null);
+                  try {
+                    const formData = new FormData();
+                    formData.append('image', file);
+                    const res = await api.post('/vision/extract-product', formData, {
+                      headers: { 'Content-Type': 'multipart/form-data' },
+                      timeout: 35000,
+                    });
+                    setScanResult({
+                      type: res.data.data.isNewProduct ? 'new_extracted' : 'existing_extracted',
+                      extracted: res.data.data.extracted,
+                      existingProduct: res.data.data.existingProduct,
+                      matchedCategoryId: res.data.data.matchedCategoryId,
+                      message: res.data.message,
+                    });
+                    setScanMode('result');
+                  } catch (err) {
+                    const msg = err?.response?.data?.error?.message || err?.message || 'Failed to analyze image';
+                    setScanError(msg);
+                  } finally {
+                    setScanLoading(false);
+                    if (photoGalleryInputRef.current) photoGalleryInputRef.current.value = '';
+                  }
+                }}
+              />
+
+              <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 sm:p-8 text-center bg-slate-50/50 hover:border-violet-300 hover:bg-violet-50/30 transition-all">
+                {scanLoading ? (
+                  <div className="py-6">
+                    <Loader2 className="w-12 h-12 mx-auto text-violet-600 animate-spin mb-4" />
+                    <p className="text-sm font-semibold text-violet-700">Analyzing medicine packaging with AI...</p>
+                    <p className="text-xs text-slate-400 mt-1">Reading product name, strength, batch & expiry date</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-violet-100 to-indigo-100 flex items-center justify-center mb-3 shadow-sm">
+                      <ImageIcon className="w-8 h-8 text-violet-600" />
+                    </div>
+                    <p className="text-sm font-bold text-slate-800 mb-1">
+                      Snap or Upload Packaging Photo
+                    </p>
+                    <p className="text-xs text-slate-500 mb-5 max-w-sm mx-auto">
+                      Capture the packaging side showing name, dosage, strength, expiry date, and batch number.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-3 justify-center max-w-md mx-auto">
+                      <Button
+                        type="button"
+                        className="bg-violet-600 hover:bg-violet-700 text-white text-xs sm:text-sm font-bold px-5 py-2.5 shadow-md shadow-violet-600/30"
+                        onClick={() => photoCameraInputRef.current?.click()}
+                      >
+                        <Camera className="w-4 h-4 mr-2" />
+                        📸 Open Device Camera
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-slate-300 hover:bg-white text-slate-700 text-xs sm:text-sm font-bold px-5 py-2.5"
+                        onClick={() => photoGalleryInputRef.current?.click()}
+                      >
+                        <Upload className="w-4 h-4 mr-2 text-slate-500" />
+                        📁 Upload Photo / File
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-2.5">
+                <Sparkles className="w-5 h-5 mt-0.5 shrink-0 text-amber-600" />
+                <div className="text-xs text-amber-900 leading-relaxed">
+                  <strong>Pharmacist Tip:</strong> If using a computer without a good camera, use the{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScanMode('phone');
+                      if (!phoneSessionId) initPhoneSession();
+                    }}
+                    className="font-bold text-violet-700 underline hover:text-violet-900"
+                  >
+                    📱 Scan with Phone
+                  </button>{' '}
+                  tab to snap the photo with your smartphone in seconds!
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 3. Barcode Scanner Mode (Fixed removeChild conflict) */}
           {scanMode === 'barcode' && (
             <div className="space-y-4">
-              <div
-                ref={barcodeContainerRef}
-                id="barcode-scanner-container"
-                className="relative w-full rounded-xl overflow-hidden bg-slate-900"
-                style={{ minHeight: '280px' }}
-              >
+              <div className="relative w-full rounded-xl overflow-hidden bg-slate-900 flex flex-col items-center justify-center min-h-[300px]">
+                {/* 
+                  CRITICAL: This div is strictly reserved for Html5Qrcode.
+                  React NEVER renders any children inside this div.
+                  This completely prevents "NotFoundError: Failed to execute 'removeChild' on 'Node'"
+                */}
+                <div
+                  id="barcode-scanner-viewfinder"
+                  className={`w-full ${barcodeScanning ? 'block' : 'hidden'}`}
+                  style={{ minHeight: '300px' }}
+                />
+
+                {/* Sibling overlay when not scanning */}
                 {!barcodeScanning && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white z-10">
+                  <div className="p-8 flex flex-col items-center justify-center text-white text-center">
                     <ScanLine className="w-16 h-16 mb-4 text-violet-400 animate-pulse" />
-                    <p className="text-sm font-medium text-slate-300">Camera will appear here</p>
+                    <p className="text-sm font-semibold text-slate-200">Live Camera Barcode Scanner</p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                      Point camera at standard pharmaceutical barcodes (EAN-13, UPC, Code-128)
+                    </p>
                     <Button
-                      className="mt-4 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold px-6 py-2.5"
+                      type="button"
+                      className="mt-5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold px-6 py-2.5 shadow-lg shadow-violet-600/30"
                       onClick={async () => {
                         setScanError(null);
-                        try {
-                          const { Html5Qrcode } = await import('html5-qrcode');
-                          const scanner = new Html5Qrcode('barcode-scanner-container');
-                          scannerRef.current = scanner;
-                          setBarcodeScanning(true);
-                          await scanner.start(
-                            { facingMode: 'environment' },
-                            { fps: 10, qrbox: { width: 250, height: 150 } },
-                            async (decodedText) => {
-                              // Barcode detected!
-                              try {
-                                await scanner.stop();
-                              } catch (e) {}
-                              scannerRef.current = null;
-                              setBarcodeScanning(false);
-                              // Look up in DB
-                              setScanLoading(true);
-                              try {
-                                const res = await api.post('/vision/lookup-barcode', { barcode: decodedText });
-                                if (res.data.data.found) {
-                                  setScanResult({
-                                    type: 'existing',
-                                    barcode: decodedText,
-                                    product: res.data.data.product,
-                                    message: res.data.message,
-                                  });
-                                } else {
-                                  setScanResult({
-                                    type: 'new_barcode',
-                                    barcode: decodedText,
-                                    message: `Barcode "${decodedText}" not found. Take a photo of the packaging to auto-fill product details.`,
-                                  });
+                        setBarcodeScanning(true);
+                        // Delay mounting of Html5Qrcode by 100ms to allow React to clean up its overlay safely
+                        setTimeout(async () => {
+                          try {
+                            const { Html5Qrcode } = await import('html5-qrcode');
+                            const scanner = new Html5Qrcode('barcode-scanner-viewfinder');
+                            scannerRef.current = scanner;
+
+                            await scanner.start(
+                              { facingMode: 'environment' },
+                              { fps: 10, qrbox: { width: 250, height: 150 } },
+                              async (decodedText) => {
+                                // Barcode detected!
+                                await stopBarcodeScanner();
+
+                                // Look up in DB
+                                setScanLoading(true);
+                                try {
+                                  const res = await api.post('/vision/lookup-barcode', { barcode: decodedText });
+                                  if (res.data.data.found) {
+                                    setScanResult({
+                                      type: 'existing',
+                                      barcode: decodedText,
+                                      product: res.data.data.product,
+                                      message: res.data.message,
+                                    });
+                                  } else {
+                                    setScanResult({
+                                      type: 'new_barcode',
+                                      barcode: decodedText,
+                                      message: `Barcode "${decodedText}" not found. Take a photo of the packaging to auto-fill product details.`,
+                                    });
+                                  }
+                                  setScanMode('result');
+                                } catch (err) {
+                                  setScanError(err?.response?.data?.error?.message || 'Barcode lookup failed');
+                                } finally {
+                                  setScanLoading(false);
                                 }
-                                setScanMode('result');
-                              } catch (err) {
-                                setScanError(err?.response?.data?.error?.message || 'Barcode lookup failed');
-                              } finally {
-                                setScanLoading(false);
-                              }
-                            },
-                            () => {} // ignore scan errors
-                          );
-                        } catch (err) {
-                          setBarcodeScanning(false);
-                          setScanError('Could not access camera. Please check permissions or try Photo mode.');
-                        }
+                              },
+                              () => {} // ignore scan frame errors
+                            );
+                          } catch (err) {
+                            console.error('Camera start error:', err);
+                            setBarcodeScanning(false);
+                            setScanError(
+                              'Could not access camera. Please check browser permissions or use "📱 Scan with Phone".'
+                            );
+                          }
+                        }, 100);
                       }}
                     >
                       <Camera className="w-4 h-4 mr-2" />
@@ -2033,6 +2388,7 @@ export const ProductsPage = () => {
                   </div>
                 )}
               </div>
+
               {barcodeScanning && (
                 <div className="text-center">
                   <p className="text-sm text-slate-500 flex items-center justify-center gap-2">
@@ -2040,101 +2396,41 @@ export const ProductsPage = () => {
                     Point camera at the barcode on the medicine packaging...
                   </p>
                   <Button
+                    type="button"
                     variant="outline"
                     className="mt-2 text-xs"
-                    onClick={async () => {
-                      if (scannerRef.current) {
-                        try { await scannerRef.current.stop(); } catch (e) {}
-                        scannerRef.current = null;
-                      }
-                      setBarcodeScanning(false);
-                    }}
+                    onClick={stopBarcodeScanner}
                   >
-                    Stop Scanner
+                    Stop Camera
                   </Button>
                 </div>
               )}
-              <p className="text-xs text-slate-400 text-center">
-                Can't scan the barcode? Switch to <button onClick={() => setScanMode('photo')} className="text-violet-600 font-semibold underline">Photo mode</button> instead.
-              </p>
-            </div>
-          )}
 
-          {/* Photo Capture Mode */}
-          {scanMode === 'photo' && (
-            <div className="space-y-4">
-              <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center bg-slate-50/50 hover:border-violet-300 hover:bg-violet-50/30 transition-all">
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    setScanLoading(true);
-                    setScanError(null);
-                    try {
-                      const formData = new FormData();
-                      formData.append('image', file);
-                      const res = await api.post('/vision/extract-product', formData, {
-                        headers: { 'Content-Type': 'multipart/form-data' },
-                        timeout: 30000,
-                      });
-                      setScanResult({
-                        type: res.data.data.isNewProduct ? 'new_extracted' : 'existing_extracted',
-                        extracted: res.data.data.extracted,
-                        existingProduct: res.data.data.existingProduct,
-                        matchedCategoryId: res.data.data.matchedCategoryId,
-                        message: res.data.message,
-                      });
-                      setScanMode('result');
-                    } catch (err) {
-                      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to analyze image';
-                      setScanError(msg);
-                    } finally {
-                      setScanLoading(false);
-                      if (photoInputRef.current) photoInputRef.current.value = '';
-                    }
+              <p className="text-xs text-slate-400 text-center">
+                Can't scan the barcode? Switch to{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopBarcodeScanner();
+                    setScanMode('phone');
+                    if (!phoneSessionId) initPhoneSession();
                   }}
-                />
-                {scanLoading ? (
-                  <div className="py-6">
-                    <Loader2 className="w-12 h-12 mx-auto text-violet-600 animate-spin mb-4" />
-                    <p className="text-sm font-semibold text-violet-700">Analyzing medicine packaging...</p>
-                    <p className="text-xs text-slate-400 mt-1">This usually takes 3-5 seconds</p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-violet-100 to-indigo-100 flex items-center justify-center mb-4">
-                      <ImageIcon className="w-8 h-8 text-violet-600" />
-                    </div>
-                    <p className="text-sm font-semibold text-slate-700 mb-1">
-                      Take a photo of the medicine packaging
-                    </p>
-                    <p className="text-xs text-slate-400 mb-4">
-                      Capture the side with name, dosage, expiry date, and batch number
-                    </p>
-                    <Button
-                      className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white text-sm font-bold px-6 py-2.5"
-                      onClick={() => photoInputRef.current?.click()}
-                    >
-                      <Camera className="w-4 h-4 mr-2" />
-                      Open Camera / Choose Photo
-                    </Button>
-                  </>
-                )}
-              </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                <p className="text-xs text-amber-700 flex items-start gap-2">
-                  <Sparkles className="w-4 h-4 mt-0.5 shrink-0 text-amber-500" />
-                  <span>
-                    <strong>AI-Powered:</strong> The system uses Gemini Vision AI to read medicine packaging and
-                    extract product name, dosage, strength, expiry date, batch number, and more automatically.
-                  </span>
-                </p>
-              </div>
+                  className="text-violet-600 font-semibold underline"
+                >
+                  📱 Scan with Phone
+                </button>{' '}
+                or{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopBarcodeScanner();
+                    setScanMode('photo');
+                  }}
+                  className="text-violet-600 font-semibold underline"
+                >
+                  Take Photo
+                </button>.
+              </p>
             </div>
           )}
 

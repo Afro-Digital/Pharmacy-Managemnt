@@ -74,4 +74,38 @@ describe('Vision & Smart Onboarding Endpoints', () => {
       if (originalKey) process.env.GEMINI_API_KEY = originalKey;
     });
   });
+
+  describe('Phone Scan Session Endpoints', () => {
+    let createdSessionId;
+
+    it('should create a new phone scan session', async () => {
+      const res = await request(app)
+        .post('/api/v1/vision/scan-session')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.sessionId).toBeDefined();
+      expect(res.body.data.uploadUrl).toContain('/medicine-scan/');
+      createdSessionId = res.data?.sessionId || res.body.data.sessionId;
+    });
+
+    it('should fetch the status of an existing scan session', async () => {
+      const res = await request(app)
+        .get(`/api/v1/vision/scan-session/${createdSessionId}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.status).toBe('PENDING');
+    });
+
+    it('should return 404 for a nonexistent scan session', async () => {
+      const res = await request(app)
+        .get('/api/v1/vision/scan-session/nonexistent-session-12345');
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('NOT_FOUND');
+    });
+  });
 });

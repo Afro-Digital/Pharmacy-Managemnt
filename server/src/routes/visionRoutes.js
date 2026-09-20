@@ -2,7 +2,13 @@ const express = require('express');
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
-const { extractProductFromImage, lookupBarcode } = require('../controllers/visionController');
+const {
+  extractProductFromImage,
+  lookupBarcode,
+  createScanSession,
+  getScanSessionStatus,
+  uploadScanSessionImage,
+} = require('../controllers/visionController');
 
 const router = express.Router();
 
@@ -37,6 +43,27 @@ router.post(
   authenticate,
   requireRole(['ADMIN', 'PHARMACIST', 'CASHIER']),
   lookupBarcode
+);
+
+// POST /api/v1/vision/scan-session — Desktop initiates a phone scan session
+router.post(
+  '/scan-session',
+  authenticate,
+  requireRole(['ADMIN', 'PHARMACIST']),
+  createScanSession
+);
+
+// GET /api/v1/vision/scan-session/:sessionId — Check scan session status (desktop polling)
+router.get(
+  '/scan-session/:sessionId',
+  getScanSessionStatus
+);
+
+// POST /api/v1/vision/scan-session/:sessionId — Phone uploads medicine photo
+router.post(
+  '/scan-session/:sessionId',
+  upload.single('image'),
+  uploadScanSessionImage
 );
 
 module.exports = router;

@@ -101,6 +101,150 @@ Important rules:
 - Be conservative with confidence: use 0.9+ only if the image is very clear.
 - If the image is blurry, dark, or not a medicine package, set confidence to 0.0 and set all fields to null.`;
 
+// In-memory store for phone scan sessions
+const scanSessions = new Map();
+
+// Periodic cleanup of sessions older than 30 mins
+setInterval(() => {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [id, s] of scanSessions.entries()) {
+    if (s.createdAt < cutoff) scanSessions.delete(id);
+  }
+}, 15 * 60 * 1000).unref();
+
+// Shared helper to process image buffer with Gemini Vision and DB lookup
+const processMedicineImageBuffer = async (buffer, apiKey) => {
+  // Preprocess image: resize to max 1024px width, convert to JPEG, compress
+  let imageBuffer;
+  try {
+    imageBuffer = await sharp(buffer)
+      .resize({ width: 1024, withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+  } catch (imgErr) {
+    const err = new Error('Could not process the uploaded image. Please try a different photo.');
+    err.code = 'INVALID_IMAGE';
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Call Gemini Vision API
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+  const imagePart = {
+    inlineData: {
+      data: imageBuffer.toString('base64'),
+      mimeType: 'image/jpeg',
+    },
+  };
+
+  const result = await model.generateContent([EXTRACTION_PROMPT, imagePart]);
+  const responseText = result.response.text();
+
+  // Parse JSON from the response (handle potential markdown code fences)
+  let extracted;
+  try {
+    let jsonStr = responseText.trim();
+    if (jsonStr.startsWith('```')) {
+      jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+    }
+    extracted = JSON.parse(jsonStr);
+  } catch (parseErr) {
+    console.error('Gemini response parse error:', responseText);
+    const err = new Error('Could not extract product information from the image. Please try a clearer photo.');
+    err.code = 'EXTRACTION_FAILED';
+    err.statusCode = 422;
+    err.raw = responseText.substring(0, 500);
+    throw err;
+  }
+
+  // Post-process: normalize the expiry date
+  if (extracted.expiry_date) {
+    const normalized = normalizeExpiryDateString(extracted.expiry_date);
+    extracted.expiry_date_raw = extracted.expiry_date;
+    extracted.expiry_date = normalized || extracted.expiry_date;
+  }
+
+  // Post-process: normalize product_type
+  if (extracted.product_type) {
+    extracted.product_type = extracted.product_type.toUpperCase().trim();
+    if (extracted.product_type !== 'MEDICINE' && extracted.product_type !== 'COSMETIC') {
+      extracted.product_type = 'MEDICINE';
+    }
+  } else {
+    extracted.product_type = 'MEDICINE';
+  }
+
+  // If barcode was extracted, check for existing product in DB
+  let existingProduct = null;
+  if (extracted.barcode) {
+    existingProduct = await prisma.product.findFirst({
+      where: { barcode: extracted.barcode },
+      include: {
+        category: true,
+        inventory: {
+          select: {
+            id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
+          },
+          orderBy: { expiry_date: 'asc' },
+        },
+      },
+    });
+  }
+
+  // If name was extracted but no barcode match, try name match
+  if (!existingProduct && extracted.name) {
+    existingProduct = await prisma.product.findFirst({
+      where: {
+        name: { equals: extracted.name, mode: 'insensitive' },
+      },
+      include: {
+        category: true,
+        inventory: {
+          select: {
+            id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
+          },
+          orderBy: { expiry_date: 'asc' },
+        },
+      },
+    });
+  }
+
+  // Try to match category from DB
+  let matchedCategoryId = null;
+  if (extracted.category) {
+    const cat = await prisma.category.findFirst({
+      where: {
+        name: { contains: extracted.category, mode: 'insensitive' },
+        type: extracted.product_type,
+      },
+    });
+    if (cat) matchedCategoryId = cat.id;
+  }
+
+  return {
+    data: {
+      extracted,
+      existingProduct: existingProduct
+        ? {
+            id: existingProduct.id,
+            name: existingProduct.name,
+            barcode: existingProduct.barcode,
+            sku: existingProduct.sku,
+            totalStock: existingProduct.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
+            batchCount: existingProduct.inventory.length,
+          }
+        : null,
+      matchedCategoryId,
+      isNewProduct: !existingProduct,
+    },
+    message: existingProduct
+      ? `Found existing product: "${existingProduct.name}". You can add a new batch to it.`
+      : 'New product detected. Review the extracted data and confirm to add it.',
+  };
+};
+
 // POST /api/v1/vision/extract-product
 const extractProductFromImage = async (req, res, next) => {
   try {
@@ -127,143 +271,25 @@ const extractProductFromImage = async (req, res, next) => {
       });
     }
 
-    // Preprocess image: resize to max 1024px width, convert to JPEG, compress
-    let imageBuffer;
     try {
-      imageBuffer = await sharp(req.file.buffer)
-        .resize({ width: 1024, withoutEnlargement: true })
-        .jpeg({ quality: 85 })
-        .toBuffer();
-    } catch (imgErr) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: 'INVALID_IMAGE',
-          message: 'Could not process the uploaded image. Please try a different photo.',
-        },
+      const result = await processMedicineImageBuffer(req.file.buffer, apiKey);
+      res.json({
+        success: true,
+        ...result,
       });
-    }
-
-    // Call Gemini Vision API
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-
-    const imagePart = {
-      inlineData: {
-        data: imageBuffer.toString('base64'),
-        mimeType: 'image/jpeg',
-      },
-    };
-
-    const result = await model.generateContent([EXTRACTION_PROMPT, imagePart]);
-    const responseText = result.response.text();
-
-    // Parse JSON from the response (handle potential markdown code fences)
-    let extracted;
-    try {
-      let jsonStr = responseText.trim();
-      // Strip markdown code fences if present
-      if (jsonStr.startsWith('```')) {
-        jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-      }
-      extracted = JSON.parse(jsonStr);
-    } catch (parseErr) {
-      console.error('Gemini response parse error:', responseText);
-      return res.status(422).json({
-        success: false,
-        error: {
-          code: 'EXTRACTION_FAILED',
-          message: 'Could not extract product information from the image. Please try a clearer photo.',
-          raw: responseText.substring(0, 500),
-        },
-      });
-    }
-
-    // Post-process: normalize the expiry date
-    if (extracted.expiry_date) {
-      const normalized = normalizeExpiryDateString(extracted.expiry_date);
-      extracted.expiry_date_raw = extracted.expiry_date;
-      extracted.expiry_date = normalized || extracted.expiry_date;
-    }
-
-    // Post-process: normalize product_type
-    if (extracted.product_type) {
-      extracted.product_type = extracted.product_type.toUpperCase().trim();
-      if (extracted.product_type !== 'MEDICINE' && extracted.product_type !== 'COSMETIC') {
-        extracted.product_type = 'MEDICINE';
-      }
-    } else {
-      extracted.product_type = 'MEDICINE';
-    }
-
-    // If barcode was extracted, check for existing product in DB
-    let existingProduct = null;
-    if (extracted.barcode) {
-      existingProduct = await prisma.product.findFirst({
-        where: { barcode: extracted.barcode },
-        include: {
-          category: true,
-          inventory: {
-            select: {
-              id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
-            },
-            orderBy: { expiry_date: 'asc' },
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({
+          success: false,
+          error: {
+            code: err.code || 'EXTRACTION_FAILED',
+            message: err.message,
+            raw: err.raw,
           },
-        },
-      });
+        });
+      }
+      throw err;
     }
-
-    // If name was extracted but no barcode match, try name match
-    if (!existingProduct && extracted.name) {
-      existingProduct = await prisma.product.findFirst({
-        where: {
-          name: { equals: extracted.name, mode: 'insensitive' },
-        },
-        include: {
-          category: true,
-          inventory: {
-            select: {
-              id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
-            },
-            orderBy: { expiry_date: 'asc' },
-          },
-        },
-      });
-    }
-
-    // Try to match category from DB
-    let matchedCategoryId = null;
-    if (extracted.category) {
-      const cat = await prisma.category.findFirst({
-        where: {
-          name: { contains: extracted.category, mode: 'insensitive' },
-          type: extracted.product_type,
-        },
-      });
-      if (cat) matchedCategoryId = cat.id;
-    }
-
-    res.json({
-      success: true,
-      data: {
-        extracted,
-        existingProduct: existingProduct
-          ? {
-              id: existingProduct.id,
-              name: existingProduct.name,
-              barcode: existingProduct.barcode,
-              sku: existingProduct.sku,
-              totalStock: existingProduct.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
-              batchCount: existingProduct.inventory.length,
-            }
-          : null,
-        matchedCategoryId,
-        isNewProduct: !existingProduct,
-      },
-      message: existingProduct
-        ? `Found existing product: "${existingProduct.name}". You can add a new batch to it.`
-        : 'New product detected. Review the extracted data and confirm to add it.',
-    });
   } catch (err) {
     // Handle Gemini API errors gracefully
     if (err.message && (err.message.includes('API_KEY') || err.message.includes('403'))) {
@@ -275,6 +301,111 @@ const extractProductFromImage = async (req, res, next) => {
         },
       });
     }
+    next(err);
+  }
+};
+
+// POST /api/v1/vision/scan-session
+const createScanSession = async (req, res, next) => {
+  try {
+    const sessionId = `medscan-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    scanSessions.set(sessionId, {
+      status: 'PENDING',
+      data: null,
+      message: null,
+      error: null,
+      createdAt: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      data: {
+        sessionId,
+        uploadUrl: `/medicine-scan/${sessionId}`,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/v1/vision/scan-session/:sessionId
+const getScanSessionStatus = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = scanSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scan session not found or expired' },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: session,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/vision/scan-session/:sessionId
+const uploadScanSessionImage = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = scanSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scan session not found or expired' },
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'NO_IMAGE', message: 'Please upload an image of the medicine packaging.' },
+      });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      session.status = 'FAILED';
+      session.error = 'Smart scan is not configured. Please add GEMINI_API_KEY to server environment.';
+      return res.status(503).json({
+        success: false,
+        error: { code: 'VISION_NOT_CONFIGURED', message: session.error },
+      });
+    }
+
+    session.status = 'ANALYZING';
+
+    try {
+      const result = await processMedicineImageBuffer(req.file.buffer, apiKey);
+      session.status = 'COMPLETED';
+      session.data = result.data;
+      session.message = result.message;
+
+      res.json({
+        success: true,
+        data: result.data,
+        message: result.message,
+      });
+    } catch (err) {
+      session.status = 'FAILED';
+      session.error = err.message || 'Could not extract product information.';
+      res.status(err.statusCode || 422).json({
+        success: false,
+        error: {
+          code: err.code || 'EXTRACTION_FAILED',
+          message: session.error,
+        },
+      });
+    }
+  } catch (err) {
     next(err);
   }
 };
@@ -351,4 +482,7 @@ const lookupBarcode = async (req, res, next) => {
 module.exports = {
   extractProductFromImage,
   lookupBarcode,
+  createScanSession,
+  getScanSessionStatus,
+  uploadScanSessionImage,
 };

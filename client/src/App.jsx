@@ -13,6 +13,7 @@ import { ReportsPage } from './pages/reports/ReportsPage';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { UsersPage } from './pages/users/UsersPage';
 import { MobileRxUploadPage } from './pages/prescriptions/MobileRxUploadPage';
+import { MobileMedicineScanPage } from './pages/products/MobileMedicineScanPage';
 import { OrdersPage } from './pages/orders/OrdersPage';
 import { ReconciliationPage } from './pages/reconciliation/ReconciliationPage';
 
@@ -50,6 +51,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/rx-upload/:sessionId" element={<MobileRxUploadPage />} />
+      <Route path="/medicine-scan/:sessionId" element={<MobileMedicineScanPage />} />
 
       <Route
         path="/"
