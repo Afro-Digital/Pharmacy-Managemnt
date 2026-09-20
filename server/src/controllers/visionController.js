@@ -451,6 +451,37 @@ const connectScanSession = async (req, res, next) => {
   }
 };
 
+// Fast online barcode lookup fallback (Open Food/Product Facts international database)
+const lookupOnlineBarcode = async (barcode) => {
+  if (!barcode || !/^\d{8,14}$/.test(barcode.trim())) return null;
+  const cleanCode = barcode.trim();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const resp = await fetch(
+      `https://world.openfoodfacts.org/api/v2/product/${cleanCode}.json?fields=product_name,generic_name,brands,quantity,categories`,
+      {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'TilexPharmacy/1.0 (info@tilexpharma.com)' },
+      }
+    );
+    clearTimeout(timeout);
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    if (json?.status === 1 && json.product) {
+      const p = json.product;
+      return {
+        name: p.product_name || null,
+        generic_name: p.generic_name || null,
+        brand: p.brands ? p.brands.split(',')[0].trim() : null,
+      };
+    }
+  } catch (e) {
+    // Silently ignore network or timeout errors
+  }
+  return null;
+};
+
 // POST /api/v1/vision/scan-session/:sessionId/stage1-barcode
 const submitStage1Barcode = async (req, res, next) => {
   try {
@@ -468,13 +499,13 @@ const submitStage1Barcode = async (req, res, next) => {
     if (!barcode && !req.file) {
       return res.status(400).json({
         success: false,
-        error: { code: 'MISSING_BARCODE', message: 'Barcode string or image is required' },
+        error: { code: 'MISSING_BARCODE', message: 'Barcode string or packaging image is required' },
       });
     }
 
     session.stage1.status = 'PROCESSING';
     session.status = 'PROCESSING';
-    session.message = 'Processing Stage 1: Reading barcode & product identity...';
+    session.message = 'Processing Stage 1: Google Lens scanning packaging & barcode...';
 
     const fileBuffer = req.file ? req.file.buffer : null;
     const barcodeInput = barcode ? String(barcode).trim() : null;
@@ -484,17 +515,18 @@ const submitStage1Barcode = async (req, res, next) => {
       try {
         let code = barcodeInput;
 
-        // If an image was submitted instead of a raw barcode string, use Gemini vision
-        if (!code && fileBuffer) {
+        // 1. Google Lens Packaging Analysis: ALWAYS analyze image if uploaded
+        if (fileBuffer) {
           const apiKey = process.env.GEMINI_API_KEY;
           if (apiKey) {
             try {
               const res = await processMedicineImageBuffer(fileBuffer, apiKey);
-              if (res.data?.extracted?.barcode) {
-                code = res.data.extracted.barcode;
-              }
-              if (res.data?.extracted) {
+              if (res?.data?.extracted) {
                 const ext = res.data.extracted;
+                if (!code && ext.barcode) {
+                  code = ext.barcode;
+                }
+                // Merge Google Lens extraction into session productData
                 Object.assign(session.productData, {
                   name: ext.name || session.productData.name,
                   name_am: ext.name_am || session.productData.name_am,
@@ -505,16 +537,25 @@ const submitStage1Barcode = async (req, res, next) => {
                   brand: ext.brand || session.productData.brand,
                   manufacturer: ext.manufacturer || session.productData.manufacturer,
                   unit: ext.unit || session.productData.unit,
+                  batch_number: ext.batch_number || session.productData.batch_number,
+                  expiry_date: ext.expiry_date || session.productData.expiry_date,
+                  requires_prescription:
+                    ext.requires_prescription !== undefined
+                      ? ext.requires_prescription
+                      : session.productData.requires_prescription,
                   category_id: res.data.matchedCategoryId || session.productData.category_id,
                 });
-                session.fieldSources.name = 'STAGE_1_VISION';
+                session.fieldSources.name = 'STAGE_1_GOOGLE_LENS';
+                session.fieldSources.dosage_form = 'STAGE_1_GOOGLE_LENS';
+                session.fieldSources.strength = 'STAGE_1_GOOGLE_LENS';
               }
             } catch (vErr) {
-              console.warn('Vision extraction for stage 1 image failed:', vErr.message);
+              console.warn('Google Lens packaging extraction failed:', vErr.message);
             }
           }
         }
 
+        // 2. Barcode resolution (Local DB + Global GS1 lookup)
         if (code) {
           session.stage1.barcode = code;
           session.productData.barcode = code;
@@ -552,16 +593,16 @@ const submitStage1Barcode = async (req, res, next) => {
             // Merge existing product info
             Object.assign(session.productData, {
               name: existing.name,
-              name_am: existing.name_am || '',
+              name_am: existing.name_am || session.productData.name_am,
               product_type: existing.product_type,
-              generic_name: existing.generic_name || '',
-              dosage_form: existing.dosage_form || '',
-              strength: existing.strength || '',
-              brand: existing.brand || '',
-              manufacturer: existing.manufacturer || '',
+              generic_name: existing.generic_name || session.productData.generic_name,
+              dosage_form: existing.dosage_form || session.productData.dosage_form,
+              strength: existing.strength || session.productData.strength,
+              brand: existing.brand || session.productData.brand,
+              manufacturer: existing.manufacturer || session.productData.manufacturer,
               unit_price: existing.unit_price,
-              unit: existing.unit || 'strip',
-              category_id: existing.category_id || '',
+              unit: existing.unit || session.productData.unit || 'strip',
+              category_id: existing.category_id || session.productData.category_id,
               requires_prescription: existing.requires_prescription,
             });
             session.fieldSources.name = 'EXISTING_DB';
@@ -569,15 +610,32 @@ const submitStage1Barcode = async (req, res, next) => {
             session.fieldSources.strength = 'EXISTING_DB';
             session.fieldSources.unit_price = 'EXISTING_DB';
           } else {
+            // New product: if name wasn't extracted from image, check online GS1/drug database
+            if (!session.productData.name) {
+              const online = await lookupOnlineBarcode(code);
+              if (online?.name) {
+                session.productData.name = online.name;
+                if (online.generic_name) session.productData.generic_name = online.generic_name;
+                if (online.brand) session.productData.brand = online.brand;
+                session.fieldSources.name = 'ONLINE_GS1_CATALOG';
+              }
+            }
+
             session.isNewProduct = true;
             session.stage1.productFound = false;
-            session.stage1.message = `Barcode "${code}" detected (New product).`;
+            session.stage1.message = session.productData.name
+              ? `Detected "${session.productData.name}" (Barcode: ${code})`
+              : `Barcode "${code}" detected (New product).`;
           }
+        } else if (session.productData.name) {
+          session.stage1.message = `Detected product "${session.productData.name}" via packaging scan.`;
         }
 
         session.stage1.status = 'COMPLETED';
         if (session.stage2.status !== 'PROCESSING' && session.stage2.status !== 'QUEUED') {
-          session.message = 'Stage 1 Complete: Barcode detected. Ready for Stage 2: Expiry & Batch.';
+          session.message = session.productData.name
+            ? `Stage 1 Complete: "${session.productData.name}" detected. Ready for Stage 2: Expiry & Batch.`
+            : 'Stage 1 Complete: Barcode detected. Ready for Stage 2: Expiry & Batch.';
         }
       } catch (err) {
         console.error('Stage 1 processing error:', err);
@@ -589,7 +647,7 @@ const submitStage1Barcode = async (req, res, next) => {
     // Non-blocking response to the phone
     res.json({
       success: true,
-      message: 'Barcode accepted and processing asynchronously',
+      message: 'Packaging & barcode accepted and processing asynchronously',
       data: {
         stage1Status: session.stage1.status,
         barcode: barcodeInput,

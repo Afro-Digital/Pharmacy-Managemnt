@@ -127,6 +127,8 @@ export const ProductsPage = () => {
 
   // Live Progressive Phone Intake state
   const [liveSession, setLiveSession] = useState(null);
+  const [phoneSessionReconnecting, setPhoneSessionReconnecting] = useState(false);
+  const consecutivePollErrorsRef = useRef(0);
   const [liveProductForm, setLiveProductForm] = useState(initialFormState);
   const liveManuallyEditedFieldsRef = useRef(new Set());
   const [liveFormSubmitting, setLiveFormSubmitting] = useState(false);
@@ -156,6 +158,8 @@ export const ProductsPage = () => {
     setLiveFormError(null);
     setLiveFormSuccess(null);
     setLiveSession(null);
+    setPhoneSessionReconnecting(false);
+    consecutivePollErrorsRef.current = 0;
     setLiveProductForm(initialFormState);
     liveManuallyEditedFieldsRef.current.clear();
     try {
@@ -206,6 +210,9 @@ export const ProductsPage = () => {
       interval = setInterval(async () => {
         try {
           const res = await api.get(`/vision/scan-session/${phoneSessionId}`);
+          consecutivePollErrorsRef.current = 0;
+          setPhoneSessionReconnecting(false);
+
           if (res.data.success && res.data.data) {
             const session = res.data.data;
             setLiveSession(session);
@@ -235,7 +242,10 @@ export const ProductsPage = () => {
             }
           }
         } catch (e) {
-          // ignore polling errors
+          consecutivePollErrorsRef.current += 1;
+          if (consecutivePollErrorsRef.current >= 2) {
+            setPhoneSessionReconnecting(true);
+          }
         }
       }, 1500);
     }
@@ -2191,12 +2201,19 @@ export const ProductsPage = () => {
                   {/* Dynamic Status Beacon */}
                   <div
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all ${
-                      liveSession?.phoneConnected
+                      phoneSessionReconnecting
+                        ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse'
+                        : liveSession?.phoneConnected
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
                     }`}
                   >
-                    {liveSession?.phoneConnected ? (
+                    {phoneSessionReconnecting ? (
+                      <>
+                        <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                        <span>Reconnecting...</span>
+                      </>
+                    ) : liveSession?.phoneConnected ? (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                         <span>Connected</span>

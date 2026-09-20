@@ -86,6 +86,9 @@ export const MobileMedicineScanPage = () => {
     };
   }, [sessionId]);
 
+  const [reconnecting, setReconnecting] = useState(false);
+  const consecutiveErrorsRef = useRef(0);
+
   // 2. Poll session status every 1.5s for real-time sync with desktop
   useEffect(() => {
     if (!sessionId) return;
@@ -93,6 +96,9 @@ export const MobileMedicineScanPage = () => {
     const interval = setInterval(async () => {
       try {
         const res = await axios.get(`${API_BASE}/vision/scan-session/${sessionId}`);
+        consecutiveErrorsRef.current = 0;
+        setReconnecting(false);
+
         if (res.data.success && res.data.data) {
           const s = res.data.data;
           setSessionData(s);
@@ -104,7 +110,10 @@ export const MobileMedicineScanPage = () => {
           }
         }
       } catch (e) {
-        // ignore polling network errors
+        consecutiveErrorsRef.current += 1;
+        if (consecutiveErrorsRef.current >= 2) {
+          setReconnecting(true);
+        }
       }
     }, 1500);
 
@@ -144,7 +153,7 @@ export const MobileMedicineScanPage = () => {
       });
 
       setStage1Submitted(true);
-      showToast('⚡ Barcode sent! Now snap the expiry date and batch number.');
+      showToast('⚡ Google Lens analyzing packaging! Now snap expiry & batch.');
       // ASYNCHRONOUS NON-BLOCKING: Transition to Stage 2 immediately!
       setCurrentStage(2);
     } catch (err) {
@@ -246,13 +255,15 @@ export const MobileMedicineScanPage = () => {
           {/* Desktop Connection Badge */}
           <div
             className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full border ${
-              connected
+              reconnecting
+                ? 'bg-amber-950/80 text-amber-300 border-amber-500/40 animate-pulse'
+                : connected
                 ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
                 : 'bg-amber-950/80 text-amber-400 border-amber-500/40 animate-pulse'
             }`}
           >
             <Laptop className="w-3.5 h-3.5" />
-            <span>{connected ? 'Desktop Connected' : 'Connecting...'}</span>
+            <span>{reconnecting ? 'Reconnecting...' : connected ? 'Desktop Connected' : 'Connecting...'}</span>
           </div>
         </div>
 
@@ -330,14 +341,14 @@ export const MobileMedicineScanPage = () => {
           <div className="h-full flex flex-col justify-between space-y-4">
             <div>
               <div className="text-center mb-3">
-                <div className="inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-violet-100 text-violet-700 font-bold mb-2">
-                  <ScanBarcode className="w-6 h-6" />
+                <div className="inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 text-white font-bold mb-2 shadow-md shadow-violet-600/30">
+                  <Sparkles className="w-6 h-6" />
                 </div>
-                <h2 className="text-lg font-extrabold text-slate-900">
-                  Stage 1: Barcode Scan
+                <h2 className="text-lg font-extrabold text-slate-900 flex items-center justify-center gap-1.5">
+                  Stage 1: Google Lens Medicine Scan
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Snap the barcode on the packaging. We extract the barcode & look up matching product records instantly.
+                  Point camera at the <strong>front of the medicine box</strong> (showing medicine name, strength & barcode). Like Google Lens, our AI instantly reads the product details and barcode together!
                 </p>
               </div>
 
@@ -360,15 +371,26 @@ export const MobileMedicineScanPage = () => {
 
               {stage1Preview ? (
                 <div className="space-y-3">
-                  <div className="relative rounded-2xl overflow-hidden border-2 border-violet-200 bg-slate-950 aspect-[4/3] flex items-center justify-center shadow-md">
+                  <div className="relative rounded-2xl overflow-hidden border-2 border-violet-300 bg-slate-950 aspect-[4/3] flex items-center justify-center shadow-md">
                     <img
                       src={stage1Preview}
-                      alt="Barcode snap"
+                      alt="Packaging snap"
                       className="w-full h-full object-contain"
                     />
+                    {/* Google Lens Reticle Overlay */}
+                    <div className="absolute inset-3 border border-white/40 rounded-xl pointer-events-none flex flex-col justify-between p-2">
+                      <div className="flex justify-between">
+                        <div className="w-5 h-5 border-t-2 border-l-2 border-violet-400 rounded-tl" />
+                        <div className="w-5 h-5 border-t-2 border-r-2 border-violet-400 rounded-tr" />
+                      </div>
+                      <div className="flex justify-between">
+                        <div className="w-5 h-5 border-b-2 border-l-2 border-violet-400 rounded-bl" />
+                        <div className="w-5 h-5 border-b-2 border-r-2 border-violet-400 rounded-br" />
+                      </div>
+                    </div>
                     <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-white font-medium flex items-center gap-1.5">
-                      <ScanBarcode className="w-3 h-3 text-violet-400" />
-                      Barcode Photo Ready
+                      <Sparkles className="w-3 h-3 text-violet-400" />
+                      Google Lens Scan Ready
                     </div>
                   </div>
 
@@ -395,21 +417,27 @@ export const MobileMedicineScanPage = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {/* Big Camera Snap Button */}
+                  {/* Google Lens Snap Box */}
                   <button
                     type="button"
                     onClick={() => stage1CameraRef.current?.click()}
-                    className="w-full py-7 px-4 rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50/50 hover:bg-violet-50 text-violet-700 flex flex-col items-center justify-center gap-2.5 transition-all active:scale-[0.98]"
+                    className="relative w-full py-8 px-4 rounded-2xl border-2 border-dashed border-violet-400 bg-gradient-to-b from-violet-50/70 to-indigo-50/50 hover:bg-violet-50 text-violet-700 flex flex-col items-center justify-center gap-2.5 transition-all active:scale-[0.98] shadow-xs group"
                   >
-                    <div className="w-14 h-14 rounded-full bg-violet-600 text-white flex items-center justify-center shadow-lg shadow-violet-400/40">
+                    {/* Viewfinder corner brackets */}
+                    <div className="absolute top-2.5 left-2.5 w-4 h-4 border-t-2 border-l-2 border-violet-600 rounded-tl pointer-events-none" />
+                    <div className="absolute top-2.5 right-2.5 w-4 h-4 border-t-2 border-r-2 border-violet-600 rounded-tr pointer-events-none" />
+                    <div className="absolute bottom-2.5 left-2.5 w-4 h-4 border-b-2 border-l-2 border-violet-600 rounded-bl pointer-events-none" />
+                    <div className="absolute bottom-2.5 right-2.5 w-4 h-4 border-b-2 border-r-2 border-violet-600 rounded-br pointer-events-none" />
+
+                    <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-violet-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-violet-500/30 group-hover:scale-105 transition-transform">
                       <Camera className="w-7 h-7" />
                     </div>
                     <div className="text-center">
                       <span className="text-sm font-bold block text-slate-900">
-                        📸 Snap Barcode Photo
+                        📸 Snap Medicine Packaging
                       </span>
-                      <span className="text-[11px] text-slate-500 mt-0.5 block">
-                        Direct camera snap of barcode stripes & digits
+                      <span className="text-[11px] text-slate-500 mt-0.5 block max-w-xs">
+                        Keep medicine name, strength & barcode in frame
                       </span>
                     </div>
                   </button>
@@ -420,13 +448,13 @@ export const MobileMedicineScanPage = () => {
                     className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-2"
                   >
                     <Upload className="w-3.5 h-3.5 text-slate-500" />
-                    Upload barcode from photo gallery
+                    Upload packaging photo from gallery
                   </button>
 
                   {/* Manual Barcode Fallback */}
                   <div className="pt-2 border-t border-slate-100">
                     <label className="text-[11px] font-semibold text-slate-500 block mb-1">
-                      Or enter barcode digits directly:
+                      Or type barcode digits (optional if not visible):
                     </label>
                     <input
                       type="text"
@@ -458,11 +486,12 @@ export const MobileMedicineScanPage = () => {
                 {stage1Uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Uploading Barcode...</span>
+                    <span>Analyzing Packaging with Google Lens AI...</span>
                   </>
                 ) : (
                   <>
-                    <span>Confirm Barcode & Go to Stage 2</span>
+                    <Sparkles className="w-4 h-4 text-violet-200" />
+                    <span>Scan Packaging & Continue to Expiry</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
