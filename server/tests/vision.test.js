@@ -96,7 +96,26 @@ describe('Vision & Smart Onboarding Endpoints', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.status).toBe('PENDING');
+      expect(['WAITING_FOR_PHONE', 'PENDING']).toContain(res.body.data.status);
+    });
+
+    it('should connect phone to scan session', async () => {
+      const res = await request(app)
+        .post(`/api/v1/vision/scan-session/${createdSessionId}/connect`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.phoneConnected).toBe(true);
+    });
+
+    it('should submit stage 1 barcode asynchronously', async () => {
+      const res = await request(app)
+        .post(`/api/v1/vision/scan-session/${createdSessionId}/stage1-barcode`)
+        .send({ barcode: '8901234567890' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.barcode).toBe('8901234567890');
     });
 
     it('should return 404 for a nonexistent scan session', async () => {

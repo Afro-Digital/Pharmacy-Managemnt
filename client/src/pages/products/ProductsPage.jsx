@@ -30,6 +30,7 @@ import {
   Calendar,
   Camera,
   ScanLine,
+  ScanBarcode,
   Loader2,
   Sparkles,
   ImageIcon,
@@ -37,6 +38,9 @@ import {
   Smartphone,
   Copy,
   ExternalLink,
+  Clock,
+  ArrowRight,
+  ShieldCheck,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -89,12 +93,45 @@ export const ProductsPage = () => {
   const photoCameraInputRef = useRef(null);
   const photoGalleryInputRef = useRef(null);
 
+  // Base product form initial state
+  const initialFormState = {
+    name: '',
+    name_am: '',
+    generic_name: '',
+    category_id: '',
+    product_type: 'MEDICINE',
+    dosage_form: '',
+    strength: '',
+    unit: 'strip',
+    brand: '',
+    manufacturer: '',
+    unit_price: '',
+    reorder_level: 10,
+    requires_prescription: false,
+    barcode: '',
+    sku: '',
+    description: '',
+    expiry_date: '',
+    batch_number: '',
+    initial_quantity: '',
+    initial_location: 'STORE',
+    inventory_id: '',
+  };
+
   // Phone QR Session state
   const [phoneSessionId, setPhoneSessionId] = useState(null);
   const [phoneSessionUrl, setPhoneSessionUrl] = useState('');
   const [phoneSessionLoading, setPhoneSessionLoading] = useState(false);
-  const [phoneSessionStatus, setPhoneSessionStatus] = useState('PENDING'); // PENDING | ANALYZING | COMPLETED | FAILED
+  const [phoneSessionStatus, setPhoneSessionStatus] = useState('WAITING_FOR_PHONE');
   const [phoneUrlCopied, setPhoneUrlCopied] = useState(false);
+
+  // Live Progressive Phone Intake state
+  const [liveSession, setLiveSession] = useState(null);
+  const [liveProductForm, setLiveProductForm] = useState(initialFormState);
+  const liveManuallyEditedFieldsRef = useRef(new Set());
+  const [liveFormSubmitting, setLiveFormSubmitting] = useState(false);
+  const [liveFormError, setLiveFormError] = useState(null);
+  const [liveFormSuccess, setLiveFormSuccess] = useState(null);
 
   // Safely stop barcode scanner
   const stopBarcodeScanner = async () => {
@@ -116,19 +153,25 @@ export const ProductsPage = () => {
   const initPhoneSession = async () => {
     setPhoneSessionLoading(true);
     setScanError(null);
+    setLiveFormError(null);
+    setLiveFormSuccess(null);
+    setLiveSession(null);
+    setLiveProductForm(initialFormState);
+    liveManuallyEditedFieldsRef.current.clear();
     try {
       const res = await api.post('/vision/scan-session');
       if (res.data.success) {
         const sid = res.data.data.sessionId;
         setPhoneSessionId(sid);
         setPhoneSessionUrl(`${window.location.origin}/medicine-scan/${sid}`);
-        setPhoneSessionStatus('PENDING');
+        setPhoneSessionStatus('WAITING_FOR_PHONE');
+        setLiveSession(res.data.data);
       }
     } catch (err) {
       console.error('Failed to create phone scan session:', err);
       if (err?.response?.status === 404) {
         setScanError(
-          'Backend is currently building & deploying the new Vision routes on Render (takes ~3-5 mins). If auto-deploy is not enabled, trigger "Manual Deploy" in the Render Dashboard.'
+          'Backend Vision service is temporarily unreachable or deploying on Render. Please wait a moment and try again.'
         );
       } else if (err?.response?.status === 503) {
         setScanError(
@@ -145,47 +188,61 @@ export const ProductsPage = () => {
     }
   };
 
-  // Poll phone session status when in phone mode
+  // Handle user typing into the live auto-fill form (prevents polling overwrite)
+  const handleLiveFieldChange = (field, value) => {
+    liveManuallyEditedFieldsRef.current.add(field);
+    setLiveProductForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // Poll phone session status continuously and auto-fill product form in real time
   useEffect(() => {
     let interval = null;
     if (
       scanModalOpen &&
       scanMode === 'phone' &&
       phoneSessionId &&
-      (phoneSessionStatus === 'PENDING' || phoneSessionStatus === 'ANALYZING')
+      !liveFormSuccess
     ) {
       interval = setInterval(async () => {
         try {
           const res = await api.get(`/vision/scan-session/${phoneSessionId}`);
           if (res.data.success && res.data.data) {
             const session = res.data.data;
-            if (session.status === 'ANALYZING') {
-              setPhoneSessionStatus('ANALYZING');
-            } else if (session.status === 'COMPLETED' && session.data) {
-              setPhoneSessionStatus('COMPLETED');
-              clearInterval(interval);
-              setScanResult({
-                type: session.data.isNewProduct ? 'new_extracted' : 'existing_extracted',
-                extracted: session.data.extracted,
-                existingProduct: session.data.existingProduct,
-                matchedCategoryId: session.data.matchedCategoryId,
-                message: session.message,
+            setLiveSession(session);
+            setPhoneSessionStatus(session.status);
+
+            // Auto-fill liveProductForm progressively as fields are detected
+            if (session.productData) {
+              setLiveProductForm((prev) => {
+                const updated = { ...prev };
+                let changed = false;
+                for (const [k, v] of Object.entries(session.productData)) {
+                  if (v != null && v !== '' && !liveManuallyEditedFieldsRef.current.has(k)) {
+                    if (k === 'expiry_date') {
+                      const norm = normalizeExpiryDateString(v) || v;
+                      if (updated[k] !== norm) {
+                        updated[k] = norm;
+                        changed = true;
+                      }
+                    } else if (updated[k] !== v) {
+                      updated[k] = v;
+                      changed = true;
+                    }
+                  }
+                }
+                return changed ? updated : prev;
               });
-              setScanMode('result');
-            } else if (session.status === 'FAILED') {
-              setPhoneSessionStatus('FAILED');
-              setScanError(session.error || 'Failed to analyze medicine packaging from phone.');
             }
           }
         } catch (e) {
           // ignore polling errors
         }
-      }, 2000);
+      }, 1500);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [scanModalOpen, scanMode, phoneSessionId, phoneSessionStatus]);
+  }, [scanModalOpen, scanMode, phoneSessionId, liveFormSuccess]);
 
   // Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, Excel serials, MM/YYYY, textual dates
   const normalizeExpiryDateString = (rawInput) => {
@@ -317,30 +374,6 @@ export const ProductsPage = () => {
     }
   };
 
-  const initialFormState = {
-    name: '',
-    name_am: '',
-    generic_name: '',
-    category_id: '',
-    product_type: 'MEDICINE',
-    dosage_form: '',
-    strength: '',
-    unit: 'strip',
-    brand: '',
-    manufacturer: '',
-    unit_price: '',
-    reorder_level: 10,
-    requires_prescription: false,
-    barcode: '',
-    sku: '',
-    description: '',
-    expiry_date: '',
-    batch_number: '',
-    initial_quantity: '',
-    initial_location: 'STORE',
-    inventory_id: '',
-  };
-
   const [formData, setFormData] = useState(initialFormState);
 
   const fetchProducts = async () => {
@@ -461,6 +494,59 @@ export const ProductsPage = () => {
       fetchProducts();
     } catch (err) {
       setErrorMessage(err.response?.data?.error?.message || 'Error saving product');
+    }
+  };
+
+  // Submit product from live progressive two-stage scan form
+  const handleLiveSaveProduct = async (e) => {
+    if (e) e.preventDefault();
+    setLiveFormError(null);
+
+    const missing = [];
+    if (!liveProductForm.name?.trim()) missing.push('Name');
+    if (!liveProductForm.product_type) missing.push('Product Type');
+    const price = parseFloat(liveProductForm.unit_price);
+    if (liveProductForm.unit_price === '' || isNaN(price) || price < 0) {
+      missing.push('Unit Price (Stage 3 Required)');
+    }
+    if (liveProductForm.requires_prescription === undefined || liveProductForm.requires_prescription === null) {
+      missing.push('Requires Prescription');
+    }
+    if (!liveProductForm.expiry_date) missing.push('Expiry Date');
+    if (!liveProductForm.batch_number?.trim()) missing.push('Batch Number');
+    const qty = parseInt(liveProductForm.initial_quantity, 10);
+    if (liveProductForm.initial_quantity === '' || isNaN(qty) || qty < 0) {
+      missing.push('Quantity (Stage 3 Required)');
+    }
+    if (!liveProductForm.unit?.trim()) missing.push('Packaging Unit');
+    if (!liveProductForm.dosage_form?.trim()) missing.push('Dosage Form');
+    if (!liveProductForm.strength?.trim()) missing.push('Strength');
+
+    if (missing.length > 0) {
+      setLiveFormError(`Stage 3 Manual Completion: Please fill in ${missing.join(', ')}.`);
+      return;
+    }
+
+    setLiveFormSubmitting(true);
+    try {
+      const payload = {
+        ...liveProductForm,
+        unit_price: parseFloat(liveProductForm.unit_price) || 0,
+        reorder_level: parseInt(liveProductForm.reorder_level, 10) || 10,
+        initial_quantity: parseInt(liveProductForm.initial_quantity, 10) || 0,
+      };
+
+      await api.post('/products', payload);
+      setLiveFormSuccess(`Product "${liveProductForm.name}" registered in inventory successfully!`);
+      fetchProducts();
+      setTimeout(() => {
+        setScanModalOpen(false);
+        setLiveFormSuccess(null);
+      }, 1800);
+    } catch (err) {
+      setLiveFormError(err.response?.data?.error?.message || 'Error saving product to inventory');
+    } finally {
+      setLiveFormSubmitting(false);
     }
   };
 
@@ -1114,7 +1200,7 @@ export const ProductsPage = () => {
               className="text-xs font-bold px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-xs"
             >
               <Camera className="w-4 h-4 mr-1.5" />
-              📷 Scan Medicine
+              Scan a Product
             </Button>
             <Button onClick={openAddModal} className="text-xs font-bold px-4 py-2 shadow-xs">
               <Plus className="w-4 h-4 mr-1.5" />
@@ -2021,10 +2107,12 @@ export const ProductsPage = () => {
           setScanMode('phone');
           setScanError(null);
           setScanResult(null);
+          setLiveFormError(null);
+          setLiveFormSuccess(null);
           stopBarcodeScanner();
         }}
-        title={scanMode === 'result' ? '✅ Extraction Result' : '📷 Smart Scan — Medicine Intake'}
-        size="lg"
+        title="📷 Smart Intake Engine — Two-Stage Product Onboarding"
+        maxWidth="max-w-6xl"
       >
         <div className="space-y-4">
           {scanError && (
@@ -2050,7 +2138,7 @@ export const ProductsPage = () => {
                 }`}
               >
                 <Smartphone className="w-4 h-4" />
-                📱 Scan with Phone
+                📱 Phone Scan (Two-Stage Intake)
               </button>
               <button
                 type="button"
@@ -2065,7 +2153,7 @@ export const ProductsPage = () => {
                 }`}
               >
                 <Camera className="w-4 h-4" />
-                Take Photo
+                Direct Photo
               </button>
               <button
                 type="button"
@@ -2079,125 +2167,592 @@ export const ProductsPage = () => {
                 }`}
               >
                 <ScanLine className="w-4 h-4" />
-                Scan Barcode
+                Webcam Barcode
               </button>
             </div>
           )}
 
-          {/* 1. Phone QR Sync Mode */}
+          {/* 1. Phone Two-Stage Progressive Intake Mode */}
           {scanMode === 'phone' && (
-            <div className="space-y-4 text-center">
-              <div className="bg-gradient-to-b from-slate-50 to-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-violet-100 text-violet-600 mb-2">
-                  <Smartphone className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-bold text-slate-900">Scan Packaging with Your Phone</h3>
-                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Scan this QR code with any smartphone camera to open the intake camera on your phone—no app download or password needed.
-                </p>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+              {/* Left Column: Phone Connection & Two-Stage Pipeline Monitor */}
+              <div className="lg:col-span-5 space-y-3.5 bg-gradient-to-b from-slate-50 to-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">Phone Connection</h4>
+                      <p className="text-[10px] text-slate-500">Scan QR to link phone camera</p>
+                    </div>
+                  </div>
 
-                {/* QR Code Container */}
-                <div className="my-4 inline-block p-4 bg-white border-2 border-violet-100 rounded-2xl shadow-md">
+                  {/* Dynamic Status Beacon */}
+                  <div
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all ${
+                      liveSession?.phoneConnected
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                    }`}
+                  >
+                    {liveSession?.phoneConnected ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Connected</span>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                        <span>Waiting for phone</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* QR Code */}
+                <div className="flex flex-col items-center justify-center p-3 bg-white border border-violet-100 rounded-2xl shadow-inner">
                   {phoneSessionUrl ? (
                     <QRCodeSVG
                       value={phoneSessionUrl}
-                      size={190}
+                      size={170}
                       level="H"
                       includeMargin
-                      className="rounded-lg"
+                      className="rounded-lg shadow-sm"
                     />
                   ) : (
-                    <div className="w-[190px] h-[190px] flex flex-col items-center justify-center bg-slate-50 rounded-lg p-3 text-center">
+                    <div className="w-[170px] h-[170px] flex flex-col items-center justify-center bg-slate-50 rounded-lg p-2 text-center">
                       {phoneSessionLoading ? (
                         <>
-                          <Loader2 className="w-8 h-8 text-violet-600 animate-spin mb-2" />
-                          <span className="text-xs text-slate-500 font-medium">Connecting...</span>
+                          <Loader2 className="w-7 h-7 text-violet-600 animate-spin mb-2" />
+                          <span className="text-[11px] text-slate-500 font-medium">Generating QR...</span>
                         </>
                       ) : (
                         <>
-                          <AlertCircle className="w-8 h-8 text-amber-500 mb-2" />
-                          <span className="text-[11px] text-slate-600 mb-2">Backend deploying...</span>
+                          <AlertCircle className="w-7 h-7 text-amber-500 mb-1.5" />
+                          <span className="text-[10px] text-slate-600 mb-2">Service unavailable</span>
                           <Button
                             type="button"
                             size="sm"
-                            className="text-xs bg-violet-600 hover:bg-violet-700 text-white font-bold px-3 py-1"
+                            className="text-[11px] bg-violet-600 hover:bg-violet-700 text-white font-bold px-2.5 py-1"
                             onClick={initPhoneSession}
                           >
-                            <RefreshCw className="w-3 h-3 mr-1" />
-                            Retry
+                            <RefreshCw className="w-3 h-3 mr-1" /> Retry
                           </Button>
                         </>
                       )}
                     </div>
                   )}
+
+                  {/* Link alternative */}
+                  <div className="mt-2.5 flex items-center gap-1.5 w-full max-w-[260px]">
+                    <input
+                      type="text"
+                      readOnly
+                      value={phoneSessionUrl}
+                      className="text-[10px] font-mono bg-slate-100 border border-slate-200 text-slate-600 rounded-lg px-2 py-1 flex-1 truncate select-all"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-[11px] shrink-0 py-1 px-2"
+                      onClick={() => {
+                        navigator.clipboard.writeText(phoneSessionUrl);
+                        setPhoneUrlCopied(true);
+                        setTimeout(() => setPhoneUrlCopied(false), 2000);
+                      }}
+                      title="Copy mobile scan link"
+                    >
+                      {phoneUrlCopied ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-[11px] shrink-0 py-1 px-2"
+                      onClick={() => window.open(phoneSessionUrl, '_blank')}
+                      title="Open mobile view in new tab for testing"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
+                  </div>
                 </div>
 
-                {/* Live Polling Status Indicator */}
-                <div className="flex items-center justify-center space-x-2 text-xs font-semibold py-2 px-4 rounded-xl max-w-xs mx-auto transition-all bg-violet-50 text-violet-700 border border-violet-200">
-                  {phoneSessionStatus === 'ANALYZING' ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-600" />
-                      <span>AI is analyzing photo from phone...</span>
-                    </>
-                  ) : (
-                    <>
-                      <div className="w-2 h-2 rounded-full bg-violet-600 animate-ping" />
-                      <span>Waiting for phone camera capture...</span>
-                    </>
-                  )}
+                {/* Two-Stage Progress Pipeline */}
+                <div className="space-y-2 text-xs">
+                  <div className="font-bold text-slate-700 text-[11px] uppercase tracking-wider flex items-center justify-between">
+                    <span>Intake Pipeline</span>
+                    <span className="text-violet-600 font-normal">Real-Time Sync</span>
+                  </div>
+
+                  {/* Stage 1 Indicator */}
+                  <div
+                    className={`p-2.5 rounded-xl border flex items-center justify-between transition-all ${
+                      liveSession?.stage1?.status === 'COMPLETED'
+                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                        : liveSession?.stage1?.status === 'PROCESSING'
+                        ? 'bg-blue-50/80 border-blue-200 text-blue-900 animate-pulse'
+                        : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {liveSession?.stage1?.status === 'COMPLETED' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : liveSession?.stage1?.status === 'PROCESSING' ? (
+                        <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+                      ) : (
+                        <ScanBarcode className="w-4 h-4 text-slate-400 shrink-0" />
+                      )}
+                      <div>
+                        <div className="font-bold text-[11px]">Stage 1: Barcode Scan</div>
+                        <div className="text-[10px] opacity-80">
+                          {liveSession?.stage1?.barcode
+                            ? `Code: ${liveSession.stage1.barcode}`
+                            : liveSession?.stage1?.status === 'PROCESSING'
+                            ? 'Analyzing barcode on server...'
+                            : 'Waiting for phone camera snap'}
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        liveSession?.stage1?.status === 'COMPLETED'
+                          ? 'bg-emerald-200 text-emerald-800'
+                          : liveSession?.stage1?.status === 'PROCESSING'
+                          ? 'bg-blue-200 text-blue-800'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {liveSession?.stage1?.status || 'Pending'}
+                    </span>
+                  </div>
+
+                  {/* Stage 2 Indicator */}
+                  <div
+                    className={`p-2.5 rounded-xl border flex items-center justify-between transition-all ${
+                      liveSession?.stage2?.status === 'COMPLETED'
+                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                        : liveSession?.stage2?.status === 'PROCESSING'
+                        ? 'bg-indigo-50/80 border-indigo-200 text-indigo-900 animate-pulse'
+                        : liveSession?.stage2?.status === 'QUEUED'
+                        ? 'bg-amber-50/80 border-amber-200 text-amber-900'
+                        : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {liveSession?.stage2?.status === 'COMPLETED' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : liveSession?.stage2?.status === 'PROCESSING' ? (
+                        <Loader2 className="w-4 h-4 text-indigo-600 animate-spin shrink-0" />
+                      ) : liveSession?.stage2?.status === 'QUEUED' ? (
+                        <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                      ) : (
+                        <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                      )}
+                      <div>
+                        <div className="font-bold text-[11px]">Stage 2: Expiry & Batch</div>
+                        <div className="text-[10px] opacity-80">
+                          {liveSession?.stage2?.status === 'COMPLETED'
+                            ? `Batch: ${liveProductForm.batch_number || 'OK'} · Exp: ${liveProductForm.expiry_date || 'OK'}`
+                            : liveSession?.stage2?.status === 'QUEUED'
+                            ? 'Queued behind Stage 1 (async)'
+                            : liveSession?.stage2?.status === 'PROCESSING'
+                            ? 'AI extracting dates & batch...'
+                            : 'Waiting for expiry photo'}
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        liveSession?.stage2?.status === 'COMPLETED'
+                          ? 'bg-emerald-200 text-emerald-800'
+                          : liveSession?.stage2?.status === 'PROCESSING'
+                          ? 'bg-indigo-200 text-indigo-800'
+                          : liveSession?.stage2?.status === 'QUEUED'
+                          ? 'bg-amber-200 text-amber-800'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}
+                    >
+                      {liveSession?.stage2?.status || 'Pending'}
+                    </span>
+                  </div>
+
+                  {/* Stage 3 Manual Completion Guidance */}
+                  <div className="p-2.5 rounded-xl border border-violet-200 bg-violet-50/50 text-violet-950 text-[11px] leading-relaxed">
+                    <strong>Stage 3: Manual Completion:</strong> Once the phone submits photos, details stream onto the form on the right. Enter the unit price & quantity, review, and save to inventory.
+                  </div>
                 </div>
 
-                {/* Direct Link Alternative */}
-                <div className="mt-4 flex items-center justify-center gap-2 max-w-md mx-auto">
-                  <input
-                    type="text"
-                    readOnly
-                    value={phoneSessionUrl}
-                    className="text-[11px] font-mono bg-slate-100 border border-slate-200 text-slate-600 rounded-lg px-3 py-1.5 w-full truncate select-all"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="text-xs shrink-0 py-1.5 px-2.5"
-                    onClick={() => {
-                      navigator.clipboard.writeText(phoneSessionUrl);
-                      setPhoneUrlCopied(true);
-                      setTimeout(() => setPhoneUrlCopied(false), 2000);
-                    }}
-                  >
-                    {phoneUrlCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span className="ml-1">{phoneUrlCopied ? 'Copied' : 'Copy'}</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="text-xs shrink-0 py-1.5 px-2.5"
-                    onClick={() => window.open(phoneSessionUrl, '_blank')}
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span className="ml-1">Open</span>
-                  </Button>
-                </div>
+                {/* Scan Next Medicine Quick Action */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={initPhoneSession}
+                  className="w-full text-xs font-semibold py-2 text-slate-700 hover:bg-slate-100 flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Scan Next Product (Reset QR)
+                </Button>
               </div>
 
-              <p className="text-xs text-slate-400">
-                On a device with a built-in camera? Switch to{' '}
-                <button
-                  type="button"
-                  onClick={() => setScanMode('photo')}
-                  className="text-violet-600 font-semibold underline"
-                >
-                  Take Photo
-                </button>{' '}
-                or{' '}
-                <button
-                  type="button"
-                  onClick={() => setScanMode('barcode')}
-                  className="text-violet-600 font-semibold underline"
-                >
-                  Scan Barcode
-                </button>.
-              </p>
+              {/* Right Column: Real-Time Auto-Filling Product Form */}
+              <div className="lg:col-span-7 space-y-3 bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-violet-600" />
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Product Intake Form
+                    </h4>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {liveSession?.phoneConnected && (
+                      <span className="text-[10px] font-bold bg-violet-100 text-violet-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-violet-600 animate-ping" />
+                        Live Streaming
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Feedback Alerts */}
+                {liveFormError && (
+                  <Alert variant="error" onClose={() => setLiveFormError(null)}>
+                    {liveFormError}
+                  </Alert>
+                )}
+                {liveFormSuccess && (
+                  <Alert variant="success" onClose={() => setLiveFormSuccess(null)}>
+                    {liveFormSuccess}
+                  </Alert>
+                )}
+
+                {/* Existing Product Alert Banner */}
+                {liveSession?.existingProduct && (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-2.5">
+                    <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="font-bold">Existing Product Matched in Catalog</div>
+                      <p className="text-[11px] text-blue-700 mt-0.5">
+                        "{liveSession.existingProduct.name}" already has {liveSession.existingProduct.totalStock ?? 0} units in inventory. Submitting this form will register this new batch into stock.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* The Live Form Fields */}
+                <form onSubmit={handleLiveSaveProduct} className="space-y-3 pt-1">
+                  {/* Row 1: Product Name & Amharic Name */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Product Name <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        {liveProductForm.name && (
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded">
+                            Auto-filled
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        required
+                        placeholder="e.g. Amoxicillin 500mg"
+                        value={liveProductForm.name}
+                        onChange={(e) => handleLiveFieldChange('name', e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        Name (Amharic)
+                      </label>
+                      <Input
+                        placeholder="e.g. አሞክሲሊን 500mg"
+                        value={liveProductForm.name_am}
+                        onChange={(e) => handleLiveFieldChange('name_am', e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 2: Type, Category, Prescription */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <Select
+                      label="Product Type"
+                      required
+                      value={liveProductForm.product_type}
+                      onChange={(e) => handleLiveFieldChange('product_type', e.target.value)}
+                      options={[
+                        { value: 'MEDICINE', label: 'Medicine' },
+                        { value: 'COSMETIC', label: 'Cosmetic' },
+                      ]}
+                    />
+
+                    <Select
+                      label="Category"
+                      value={liveProductForm.category_id}
+                      onChange={(e) => handleLiveFieldChange('category_id', e.target.value)}
+                      options={[
+                        { value: '', label: 'Select Category (Optional)' },
+                        ...categories
+                          .filter((c) => c.type === liveProductForm.product_type)
+                          .map((c) => ({ value: c.id, label: c.name })),
+                      ]}
+                    />
+
+                    <Select
+                      label="Rx Prescription"
+                      required
+                      value={liveProductForm.requires_prescription ? 'true' : 'false'}
+                      onChange={(e) =>
+                        handleLiveFieldChange('requires_prescription', e.target.value === 'true')
+                      }
+                      options={[
+                        { value: 'false', label: 'No (OTC / Over The Counter)' },
+                        { value: 'true', label: 'Yes (Rx Required)' },
+                      ]}
+                    />
+                  </div>
+
+                  {/* Row 3: Dosage Form, Strength, Packaging Unit */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Dosage Form <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        {liveProductForm.dosage_form && (
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded">
+                            Auto
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        required
+                        placeholder="e.g. Capsule, Tablet, Syrup"
+                        value={liveProductForm.dosage_form}
+                        onChange={(e) => handleLiveFieldChange('dosage_form', e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Strength <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        {liveProductForm.strength && (
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded">
+                            Auto
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        required
+                        placeholder="e.g. 500mg, 100ml"
+                        value={liveProductForm.strength}
+                        onChange={(e) => handleLiveFieldChange('strength', e.target.value)}
+                      />
+                    </div>
+
+                    <Select
+                      label="Packaging Unit"
+                      required
+                      value={liveProductForm.unit}
+                      onChange={(e) => handleLiveFieldChange('unit', e.target.value)}
+                      options={[
+                        { value: 'strip', label: 'Strip (ካርታ)' },
+                        { value: 'bottle', label: 'Bottle (ጠርሙስ)' },
+                        { value: 'sachet', label: 'Sachet (ፓኬት)' },
+                        { value: 'ampule', label: 'Ampule (አምፑል)' },
+                        { value: 'box', label: 'Box (ካርቶን / ሳጥን)' },
+                        { value: 'vial', label: 'Vial (ቫያል)' },
+                        { value: 'tube', label: 'Tube (ቱቦ)' },
+                        { value: 'tablet', label: 'Tablet (ኪኒን)' },
+                        { value: 'jar', label: 'Jar (ማሰሮ)' },
+                      ]}
+                    />
+                  </div>
+
+                  {/* Row 4: Generic Name, Brand, Manufacturer */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <Input
+                      label="Generic / INN Name"
+                      placeholder="e.g. Amoxicillin"
+                      value={liveProductForm.generic_name}
+                      onChange={(e) => handleLiveFieldChange('generic_name', e.target.value)}
+                    />
+                    <Input
+                      label="Brand"
+                      placeholder="e.g. Epharm, Cadila"
+                      value={liveProductForm.brand}
+                      onChange={(e) => handleLiveFieldChange('brand', e.target.value)}
+                    />
+                    <Input
+                      label="Manufacturer"
+                      placeholder="e.g. Ethiopian Pharma"
+                      value={liveProductForm.manufacturer}
+                      onChange={(e) => handleLiveFieldChange('manufacturer', e.target.value)}
+                    />
+                  </div>
+
+                  {/* Row 5: Barcode & Batch & Expiry (Stage 1 & 2 Results) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">Barcode</label>
+                        {liveProductForm.barcode && (
+                          <span className="text-[9px] font-bold text-violet-700 bg-violet-100 px-1.5 py-0.2 rounded">
+                            Stage 1
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        placeholder="Scan or enter barcode"
+                        value={liveProductForm.barcode}
+                        onChange={(e) => handleLiveFieldChange('barcode', e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Batch / Lot No. <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        {liveProductForm.batch_number && (
+                          <span className="text-[9px] font-bold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded">
+                            Stage 2
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        required
+                        placeholder="e.g. BATCH-2026"
+                        value={liveProductForm.batch_number}
+                        onChange={(e) => handleLiveFieldChange('batch_number', e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Expiry Date <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        {liveProductForm.expiry_date && (
+                          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded">
+                            Stage 2
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        type="date"
+                        required
+                        value={liveProductForm.expiry_date}
+                        onChange={(e) => handleLiveFieldChange('expiry_date', e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 6: Stage 3 Manual Completion Fields (Price & Quantity) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3 bg-violet-50/70 border-2 border-violet-200 rounded-xl">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-violet-950">
+                          Unit Price (ETB) <span className="text-rose-500">*</span>
+                        </label>
+                        <span className="text-[9px] font-bold text-violet-700 bg-violet-200/80 px-1.5 py-0.2 rounded">
+                          Stage 3
+                        </span>
+                      </div>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        required
+                        placeholder="0.00"
+                        value={liveProductForm.unit_price}
+                        onChange={(e) => handleLiveFieldChange('unit_price', e.target.value)}
+                        className="border-violet-300 focus:border-violet-600 focus:ring-violet-600"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-violet-950">
+                          Initial Quantity <span className="text-rose-500">*</span>
+                        </label>
+                        <span className="text-[9px] font-bold text-violet-700 bg-violet-200/80 px-1.5 py-0.2 rounded">
+                          Stage 3
+                        </span>
+                      </div>
+                      <Input
+                        type="number"
+                        min="0"
+                        required
+                        placeholder="e.g. 50"
+                        value={liveProductForm.initial_quantity}
+                        onChange={(e) => handleLiveFieldChange('initial_quantity', e.target.value)}
+                        className="border-violet-300 focus:border-violet-600 focus:ring-violet-600"
+                      />
+                    </div>
+
+                    <Select
+                      label="Stock Location"
+                      value={liveProductForm.initial_location || 'STORE'}
+                      onChange={(e) => handleLiveFieldChange('initial_location', e.target.value)}
+                      options={[
+                        { value: 'STORE', label: 'Store (Bulk Warehouse)' },
+                        { value: 'DISPENSARY', label: 'Dispensary (Front Counter)' },
+                      ]}
+                    />
+                  </div>
+
+                  {/* Form Submission Action Buttons */}
+                  <div className="flex items-center justify-between pt-2 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setLiveProductForm(initialFormState);
+                        liveManuallyEditedFieldsRef.current.clear();
+                      }}
+                      className="text-xs text-slate-600"
+                    >
+                      Clear Form
+                    </Button>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setScanModalOpen(false)}
+                        className="text-xs"
+                      >
+                        Cancel
+                      </Button>
+
+                      <Button
+                        type="submit"
+                        disabled={liveFormSubmitting}
+                        className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs px-5 py-2.5 shadow-md shadow-emerald-700/20 flex items-center gap-1.5"
+                      >
+                        {liveFormSubmitting ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Saving Product...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Save Product to Inventory</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </form>
+              </div>
             </div>
           )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import {
@@ -11,281 +11,430 @@ import {
   Sparkles,
   ArrowRight,
   ShieldCheck,
+  ScanBarcode,
+  Calendar,
+  Layers,
+  ChevronRight,
+  Laptop,
+  Check,
+  Clock,
+  Loader2,
 } from 'lucide-react';
 import { API_BASE } from '../../services/api';
 
 export const MobileMedicineScanPage = () => {
   const { sessionId } = useParams();
 
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState(null);
+  // Navigation Stage: 1 = Barcode, 2 = Expiry & Batch, 3 = Complete / Live Sync
+  const [currentStage, setCurrentStage] = useState(1);
+
+  // Connection status
+  const [connected, setConnected] = useState(false);
+  const [sessionData, setSessionData] = useState(null);
+
+  // Stage 1 State (Barcode)
+  const [stage1File, setStage1File] = useState(null);
+  const [stage1Preview, setStage1Preview] = useState(null);
+  const [stage1ManualBarcode, setStage1ManualBarcode] = useState('');
+  const [stage1Uploading, setStage1Uploading] = useState(false);
+  const [stage1Submitted, setStage1Submitted] = useState(false);
+
+  // Stage 2 State (Expiry & Batch)
+  const [stage2File, setStage2File] = useState(null);
+  const [stage2Preview, setStage2Preview] = useState(null);
+  const [stage2Uploading, setStage2Uploading] = useState(false);
+  const [stage2Submitted, setStage2Submitted] = useState(false);
+
+  // Status & Error
   const [errorMessage, setErrorMessage] = useState(null);
+  const [toastMessage, setToastMessage] = useState(null);
 
-  const cameraInputRef = useRef(null);
-  const galleryInputRef = useRef(null);
+  // Refs for camera / file inputs
+  const stage1CameraRef = useRef(null);
+  const stage1GalleryRef = useRef(null);
+  const stage2CameraRef = useRef(null);
+  const stage2GalleryRef = useRef(null);
 
-  const handleFileChange = (e) => {
+  // Notify user briefly
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  // 1. On Mount: Connect to Desktop Session
+  useEffect(() => {
+    let isMounted = true;
+
+    const connectToDesktop = async () => {
+      try {
+        const res = await axios.post(`${API_BASE}/vision/scan-session/${sessionId}/connect`);
+        if (isMounted && res.data.success) {
+          setConnected(true);
+          setSessionData(res.data.data);
+        }
+      } catch (err) {
+        console.warn('Could not register phone handshake:', err);
+      }
+    };
+
+    if (sessionId) {
+      connectToDesktop();
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [sessionId]);
+
+  // 2. Poll session status every 1.5s for real-time sync with desktop
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/vision/scan-session/${sessionId}`);
+        if (res.data.success && res.data.data) {
+          const s = res.data.data;
+          setSessionData(s);
+          if (s.phoneConnected) setConnected(true);
+
+          // If stage 2 is complete, auto-advance to stage 3 if user is on stage 2
+          if (s.stage2?.status === 'COMPLETED' && s.stage1?.status === 'COMPLETED') {
+            setStage2Submitted(true);
+          }
+        }
+      } catch (e) {
+        // ignore polling network errors
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [sessionId]);
+
+  // Handle Stage 1 file selection (Barcode)
+  const handleStage1FileChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    setSelectedFile(file);
-    setPreviewUrl(URL.createObjectURL(file));
+    setStage1File(file);
+    setStage1Preview(URL.createObjectURL(file));
     setErrorMessage(null);
   };
 
-  const handleUploadAndAnalyze = async () => {
-    if (!selectedFile) {
-      setErrorMessage('Please snap or select a photo of the medicine first.');
+  // Submit Stage 1 Barcode asynchronously
+  const handleStage1Submit = async () => {
+    if (!stage1File && !stage1ManualBarcode.trim()) {
+      setErrorMessage('Please snap a photo of the barcode or type the barcode numbers.');
       return;
     }
 
-    setIsAnalyzing(true);
+    setStage1Uploading(true);
     setErrorMessage(null);
 
-    const formData = new FormData();
-    formData.append('image', selectedFile);
-
     try {
-      const res = await axios.post(`${API_BASE}/vision/scan-session/${sessionId}`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      const formData = new FormData();
+      if (stage1File) {
+        formData.append('image', stage1File);
+      }
+      if (stage1ManualBarcode.trim()) {
+        formData.append('barcode', stage1ManualBarcode.trim());
+      }
+
+      await axios.post(`${API_BASE}/vision/scan-session/${sessionId}/stage1-barcode`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      if (res.data.success) {
-        setAnalysisResult(res.data.data);
-      }
+      setStage1Submitted(true);
+      showToast('⚡ Barcode sent! Now snap the expiry date and batch number.');
+      // ASYNCHRONOUS NON-BLOCKING: Transition to Stage 2 immediately!
+      setCurrentStage(2);
     } catch (err) {
-      const msg =
-        err.response?.data?.error?.message ||
-        'Could not analyze packaging. Please try a clearer, well-lit photo.';
+      const msg = err.response?.data?.error?.message || 'Failed to submit barcode. Please try again.';
       setErrorMessage(msg);
     } finally {
-      setIsAnalyzing(false);
+      setStage1Uploading(false);
     }
   };
 
-  const handleRetake = () => {
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setAnalysisResult(null);
+  // Handle Stage 2 file selection (Expiry & Batch)
+  const handleStage2FileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStage2File(file);
+    setStage2Preview(URL.createObjectURL(file));
     setErrorMessage(null);
-    if (cameraInputRef.current) cameraInputRef.current.value = '';
-    if (galleryInputRef.current) galleryInputRef.current.value = '';
   };
 
+  // Submit Stage 2 Expiry/Batch asynchronously
+  const handleStage2Submit = async () => {
+    if (!stage2File) {
+      setErrorMessage('Please take a clear photo of the expiry date and batch number stamp.');
+      return;
+    }
+
+    setStage2Uploading(true);
+    setErrorMessage(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('image', stage2File);
+
+      // Backend returns 202 Accepted immediately
+      await axios.post(`${API_BASE}/vision/scan-session/${sessionId}/stage2-expiry`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      setStage2Submitted(true);
+      showToast('🚀 Expiry & Batch photo received! Server is processing.');
+      // Transition to Stage 3 Live Sync
+      setCurrentStage(3);
+    } catch (err) {
+      const msg = err.response?.data?.error?.message || 'Failed to upload photo. Please retry.';
+      setErrorMessage(msg);
+    } finally {
+      setStage2Uploading(false);
+    }
+  };
+
+  // Reset to scan another medicine
+  const handleScanAnother = () => {
+    setStage1File(null);
+    setStage1Preview(null);
+    setStage1ManualBarcode('');
+    setStage1Submitted(false);
+
+    setStage2File(null);
+    setStage2Preview(null);
+    setStage2Submitted(false);
+
+    setErrorMessage(null);
+    setCurrentStage(1);
+    if (stage1CameraRef.current) stage1CameraRef.current.value = '';
+    if (stage1GalleryRef.current) stage1GalleryRef.current.value = '';
+    if (stage2CameraRef.current) stage2CameraRef.current.value = '';
+    if (stage2GalleryRef.current) stage2GalleryRef.current.value = '';
+  };
+
+  const productData = sessionData?.productData || {};
+  const stage1 = sessionData?.stage1 || {};
+  const stage2 = sessionData?.stage2 || {};
+
   return (
-    <div className="min-h-screen w-full bg-slate-900 text-white flex flex-col justify-between p-4 sm:p-6 font-sans">
-      {/* Top Header */}
-      <header className="w-full max-w-md mx-auto text-center pt-2 pb-4">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-700 text-white shadow-xl shadow-violet-900/40 mb-2">
-          <Pill className="w-6 h-6" />
+    <div className="min-h-screen w-full bg-slate-950 text-white flex flex-col justify-between p-3 sm:p-5 font-sans">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-violet-600 text-white font-semibold text-xs py-2.5 px-4 rounded-full shadow-2xl flex items-center gap-2 border border-violet-400/30 animate-bounce">
+          <Sparkles className="w-4 h-4 text-violet-200" />
+          <span>{toastMessage}</span>
         </div>
-        <h1 className="text-xl font-bold tracking-tight text-white flex items-center justify-center gap-1.5">
-          TilexPharmacy
-          <span className="text-xs bg-violet-600 text-violet-100 font-bold px-2 py-0.5 rounded-full">
-            AI Vision
-          </span>
-        </h1>
-        <p className="text-xs text-slate-300 mt-0.5">Mobile Camera Medicine Scanner</p>
-      </header>
+      )}
 
-      {/* Main Content Area */}
-      <main className="w-full max-w-md mx-auto bg-white text-slate-900 rounded-3xl p-5 sm:p-6 shadow-2xl flex-1 flex flex-col justify-between my-2">
-        {analysisResult ? (
-          /* SUCCESS STATE */
-          <div className="h-full flex flex-col justify-between py-2 space-y-4">
-            <div className="text-center space-y-3">
-              <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
-                <CheckCircle2 className="w-10 h-10" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Analyzed & Transferred!</h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Product details have been sent to your desktop screen in real time.
-                </p>
-              </div>
+      {/* Top Header */}
+      <header className="w-full max-w-md mx-auto pt-1 pb-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-700 text-white shadow-lg shadow-violet-900/40 flex items-center justify-center">
+              <Pill className="w-5 h-5" />
             </div>
-
-            {/* Extracted Product Summary Card */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5 text-left text-xs">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                <span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">
-                  Detected Product
-                </span>
-                <span className="bg-violet-100 text-violet-700 font-bold px-2 py-0.5 rounded">
-                  {analysisResult.extracted?.product_type || 'MEDICINE'}
-                </span>
-              </div>
-
-              <div>
-                <p className="text-sm font-bold text-slate-900">
-                  {analysisResult.extracted?.name || 'Unknown Product'}
-                </p>
-                {analysisResult.extracted?.name_am && (
-                  <p className="text-xs text-slate-600 font-medium">{analysisResult.extracted.name_am}</p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Strength:</span>
-                  <span className="font-semibold text-slate-700">
-                    {analysisResult.extracted?.strength || '—'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Dosage Form:</span>
-                  <span className="font-semibold text-slate-700">
-                    {analysisResult.extracted?.dosage_form || '—'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Batch Number:</span>
-                  <span className="font-mono font-semibold text-slate-700">
-                    {analysisResult.extracted?.batch_number || '—'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Expiry Date:</span>
-                  <span className="font-mono font-semibold text-violet-700">
-                    {analysisResult.extracted?.expiry_date || '—'}
-                  </span>
-                </div>
-              </div>
-
-              {analysisResult.existingProduct && (
-                <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-[11px] flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 shrink-0 text-blue-600" />
-                  <span>Matches existing item: <strong>{analysisResult.existingProduct.name}</strong></span>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2 pt-2">
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-center text-xs font-semibold">
-                🖥️ You can now review & save the product on your desktop!
-              </div>
-              <button
-                type="button"
-                onClick={handleRetake}
-                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-md transition-all"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Scan Another Medicine
-              </button>
+            <div>
+              <h1 className="text-base font-bold tracking-tight text-white leading-tight">
+                TilexPharmacy
+              </h1>
+              <p className="text-[11px] text-slate-400">Two-Stage Intake Engine</p>
             </div>
           </div>
-        ) : (
-          /* CAPTURE / PREVIEW STATE */
+
+          {/* Desktop Connection Badge */}
+          <div
+            className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+              connected
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40'
+                : 'bg-amber-950/80 text-amber-400 border-amber-500/40 animate-pulse'
+            }`}
+          >
+            <Laptop className="w-3.5 h-3.5" />
+            <span>{connected ? 'Desktop Connected' : 'Connecting...'}</span>
+          </div>
+        </div>
+
+        {/* 3-Stage Step Navigation Indicator */}
+        <div className="grid grid-cols-3 gap-2 mt-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-1.5 shadow-inner">
+          {/* Stage 1 Pill */}
+          <button
+            type="button"
+            onClick={() => setCurrentStage(1)}
+            className={`py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center gap-0.5 transition-all ${
+              currentStage === 1
+                ? 'bg-violet-600 text-white shadow-md'
+                : stage1.status === 'COMPLETED' || stage1Submitted
+                ? 'bg-emerald-950/40 text-emerald-300'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-1 text-[11px] font-bold">
+              {stage1.status === 'COMPLETED' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <ScanBarcode className="w-3.5 h-3.5" />
+              )}
+              <span>Stage 1</span>
+            </div>
+            <span className="text-[9px] opacity-80 leading-none">Barcode</span>
+          </button>
+
+          {/* Stage 2 Pill */}
+          <button
+            type="button"
+            onClick={() => setCurrentStage(2)}
+            className={`py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center gap-0.5 transition-all ${
+              currentStage === 2
+                ? 'bg-violet-600 text-white shadow-md'
+                : stage2.status === 'COMPLETED' || stage2Submitted
+                ? 'bg-emerald-950/40 text-emerald-300'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-1 text-[11px] font-bold">
+              {stage2.status === 'COMPLETED' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Calendar className="w-3.5 h-3.5" />
+              )}
+              <span>Stage 2</span>
+            </div>
+            <span className="text-[9px] opacity-80 leading-none">Expiry / Batch</span>
+          </button>
+
+          {/* Stage 3 Pill */}
+          <button
+            type="button"
+            onClick={() => setCurrentStage(3)}
+            className={`py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center gap-0.5 transition-all ${
+              currentStage === 3
+                ? 'bg-violet-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-1 text-[11px] font-bold">
+              <Laptop className="w-3.5 h-3.5" />
+              <span>Stage 3</span>
+            </div>
+            <span className="text-[9px] opacity-80 leading-none">Desktop Sync</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Main Interactive Card */}
+      <main className="w-full max-w-md mx-auto bg-white text-slate-900 rounded-3xl p-5 shadow-2xl flex-1 flex flex-col justify-between my-1">
+        {/* ─── STAGE 1: BARCODE SCAN ─── */}
+        {currentStage === 1 && (
           <div className="h-full flex flex-col justify-between space-y-4">
             <div>
-              <div className="text-center mb-4">
-                <h2 className="text-lg font-bold text-slate-900">Scan Medicine Packaging</h2>
+              <div className="text-center mb-3">
+                <div className="inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-violet-100 text-violet-700 font-bold mb-2">
+                  <ScanBarcode className="w-6 h-6" />
+                </div>
+                <h2 className="text-lg font-extrabold text-slate-900">
+                  Stage 1: Barcode Scan
+                </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Snap a photo of the medicine box, blister pack, or bottle. Our AI will automatically
-                  extract name, strength, batch, and expiry.
+                  Snap the barcode on the packaging. We extract the barcode & look up matching product records instantly.
                 </p>
               </div>
 
               {/* Hidden Inputs */}
               <input
-                ref={cameraInputRef}
+                ref={stage1CameraRef}
                 type="file"
                 accept="image/*"
                 capture="environment"
                 className="hidden"
-                onChange={handleFileChange}
+                onChange={handleStage1FileChange}
               />
               <input
-                ref={galleryInputRef}
+                ref={stage1GalleryRef}
                 type="file"
                 accept="image/*"
                 className="hidden"
-                onChange={handleFileChange}
+                onChange={handleStage1FileChange}
               />
 
-              {previewUrl ? (
-                /* PREVIEW BOX */
+              {stage1Preview ? (
                 <div className="space-y-3">
-                  <div className="relative rounded-2xl overflow-hidden border-2 border-violet-200 bg-slate-900 aspect-[4/3] flex items-center justify-center shadow-md">
+                  <div className="relative rounded-2xl overflow-hidden border-2 border-violet-200 bg-slate-950 aspect-[4/3] flex items-center justify-center shadow-md">
                     <img
-                      src={previewUrl}
-                      alt="Captured medicine"
+                      src={stage1Preview}
+                      alt="Barcode snap"
                       className="w-full h-full object-contain"
                     />
-                    {isAnalyzing && (
-                      <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center text-white p-4 text-center">
-                        <div className="relative mb-3">
-                          <div className="w-12 h-12 rounded-full border-4 border-violet-400/30 border-t-violet-400 animate-spin" />
-                          <Sparkles className="w-5 h-5 text-violet-300 absolute inset-0 m-auto animate-pulse" />
-                        </div>
-                        <p className="text-sm font-bold">Analyzing with AI...</p>
-                        <p className="text-xs text-slate-300 mt-1 max-w-[220px]">
-                          Extracting medicine identity, strength, batch, and expiry date
-                        </p>
-                      </div>
-                    )}
+                    <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-white font-medium flex items-center gap-1.5">
+                      <ScanBarcode className="w-3 h-3 text-violet-400" />
+                      Barcode Photo Ready
+                    </div>
                   </div>
 
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      disabled={isAnalyzing}
-                      onClick={() => cameraInputRef.current?.click()}
-                      className="flex-1 py-2 px-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      disabled={stage1Uploading}
+                      onClick={() => stage1CameraRef.current?.click()}
+                      className="flex-1 py-2 px-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      Retake Photo
+                      Retake
                     </button>
                     <button
                       type="button"
-                      disabled={isAnalyzing}
-                      onClick={() => galleryInputRef.current?.click()}
-                      className="flex-1 py-2 px-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      disabled={stage1Uploading}
+                      onClick={() => stage1GalleryRef.current?.click()}
+                      className="flex-1 py-2 px-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5"
                     >
                       <Upload className="w-3.5 h-3.5" />
-                      Pick from Gallery
+                      Gallery
                     </button>
                   </div>
                 </div>
               ) : (
-                /* INITIAL CAMERA TRIGGER BOX */
                 <div className="space-y-3">
+                  {/* Big Camera Snap Button */}
                   <button
                     type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    className="w-full py-8 px-4 rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50/50 hover:bg-violet-50 text-violet-700 flex flex-col items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                    onClick={() => stage1CameraRef.current?.click()}
+                    className="w-full py-7 px-4 rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50/50 hover:bg-violet-50 text-violet-700 flex flex-col items-center justify-center gap-2.5 transition-all active:scale-[0.98]"
                   >
-                    <div className="w-16 h-16 rounded-full bg-violet-600 text-white flex items-center justify-center shadow-lg shadow-violet-400/40">
-                      <Camera className="w-8 h-8" />
+                    <div className="w-14 h-14 rounded-full bg-violet-600 text-white flex items-center justify-center shadow-lg shadow-violet-400/40">
+                      <Camera className="w-7 h-7" />
                     </div>
                     <div className="text-center">
-                      <span className="text-base font-bold block text-slate-900">
-                        📸 Tap to Snap Photo
+                      <span className="text-sm font-bold block text-slate-900">
+                        📸 Snap Barcode Photo
                       </span>
-                      <span className="text-xs text-slate-500 mt-0.5 block">
-                        Opens phone camera directly
+                      <span className="text-[11px] text-slate-500 mt-0.5 block">
+                        Direct camera snap of barcode stripes & digits
                       </span>
                     </div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => galleryInputRef.current?.click()}
-                    className="w-full py-3 px-4 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+                    onClick={() => stage1GalleryRef.current?.click()}
+                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-2"
                   >
-                    <Upload className="w-4 h-4 text-slate-500" />
-                    Choose photo from phone gallery / files
+                    <Upload className="w-3.5 h-3.5 text-slate-500" />
+                    Upload barcode from photo gallery
                   </button>
 
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-left">
-                    <p className="text-[11px] text-amber-800 font-medium leading-relaxed">
-                      💡 <strong>Tips for best result:</strong> Hold camera steady, ensure good lighting,
-                      and keep the brand name, strength (e.g. 500mg), and expiry date visible.
-                    </p>
+                  {/* Manual Barcode Fallback */}
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                      Or enter barcode digits directly:
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 8901234567890"
+                      value={stage1ManualBarcode}
+                      onChange={(e) => setStage1ManualBarcode(e.target.value)}
+                      className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
                   </div>
                 </div>
               )}
@@ -298,31 +447,344 @@ export const MobileMedicineScanPage = () => {
               )}
             </div>
 
-            {/* Bottom Action Button */}
-            {previewUrl && (
-              <div className="pt-2">
-                <button
-                  type="button"
-                  disabled={isAnalyzing}
-                  onClick={handleUploadAndAnalyze}
-                  className="w-full py-3.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-violet-600/30 transition-all disabled:opacity-50"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{isAnalyzing ? 'Analyzing Packaging...' : 'Send to Desktop & Analyze'}</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+            {/* Bottom Button for Stage 1 */}
+            <div className="pt-3">
+              <button
+                type="button"
+                disabled={stage1Uploading || (!stage1File && !stage1ManualBarcode.trim())}
+                onClick={handleStage1Submit}
+                className="w-full py-3.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-violet-600/30 transition-all disabled:opacity-50"
+              >
+                {stage1Uploading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Uploading Barcode...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Confirm Barcode & Go to Stage 2</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCurrentStage(2)}
+                className="w-full text-center text-xs text-slate-500 hover:text-violet-600 font-medium mt-2 py-1"
+              >
+                Skip to Stage 2 (No barcode on packaging) →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STAGE 2: EXPIRY & BATCH CAPTURE ─── */}
+        {currentStage === 2 && (
+          <div className="h-full flex flex-col justify-between space-y-4">
+            <div>
+              {/* Async Non-blocking Banner */}
+              {stage1.status === 'PROCESSING' && (
+                <div className="mb-3 p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs flex items-center gap-2 shadow-xs">
+                  <Loader2 className="w-4 h-4 shrink-0 animate-spin text-blue-600" />
+                  <span className="leading-tight">
+                    <strong>Stage 1 is processing in background!</strong> You can take this expiry picture immediately without waiting.
+                  </span>
+                </div>
+              )}
+
+              {stage1.status === 'COMPLETED' && stage1.barcode && (
+                <div className="mb-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs flex items-center justify-between shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Barcode: <strong className="font-mono">{stage1.barcode}</strong></span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-200 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
+                    Stage 1 OK
+                  </span>
+                </div>
+              )}
+
+              <div className="text-center mb-3">
+                <div className="inline-flex items-center justify-center w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-700 font-bold mb-2">
+                  <Calendar className="w-6 h-6" />
+                </div>
+                <h2 className="text-lg font-extrabold text-slate-900">
+                  Stage 2: Expiry & Batch Capture
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Point camera at the printed stamp showing <strong>EXP date</strong> and <strong>Batch/Lot No.</strong>
+                </p>
               </div>
-            )}
+
+              {/* Hidden Inputs */}
+              <input
+                ref={stage2CameraRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleStage2FileChange}
+              />
+              <input
+                ref={stage2GalleryRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleStage2FileChange}
+              />
+
+              {stage2Preview ? (
+                <div className="space-y-3">
+                  <div className="relative rounded-2xl overflow-hidden border-2 border-indigo-200 bg-slate-950 aspect-[4/3] flex items-center justify-center shadow-md">
+                    <img
+                      src={stage2Preview}
+                      alt="Expiry snap"
+                      className="w-full h-full object-contain"
+                    />
+                    <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-white font-medium flex items-center gap-1.5">
+                      <Calendar className="w-3 h-3 text-indigo-400" />
+                      Expiry Stamp Ready
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={stage2Uploading}
+                      onClick={() => stage2CameraRef.current?.click()}
+                      className="flex-1 py-2 px-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Retake
+                    </button>
+                    <button
+                      type="button"
+                      disabled={stage2Uploading}
+                      onClick={() => stage2GalleryRef.current?.click()}
+                      className="flex-1 py-2 px-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      Gallery
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => stage2CameraRef.current?.click()}
+                    className="w-full py-8 px-4 rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50/50 hover:bg-indigo-50 text-indigo-700 flex flex-col items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                  >
+                    <div className="w-14 h-14 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-400/40">
+                      <Camera className="w-7 h-7" />
+                    </div>
+                    <div className="text-center">
+                      <span className="text-sm font-bold block text-slate-900">
+                        📸 Snap Expiry & Batch Stamp
+                      </span>
+                      <span className="text-[11px] text-slate-500 mt-0.5 block">
+                        Focus on the stamped text (e.g. B.N. 4920 EXP 08/2027)
+                      </span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => stage2GalleryRef.current?.click()}
+                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-2"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-slate-500" />
+                    Choose photo from gallery
+                  </button>
+                </div>
+              )}
+
+              {errorMessage && (
+                <div className="mt-3 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-start gap-2 text-left">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Action Button */}
+            <div className="pt-3">
+              <button
+                type="button"
+                disabled={stage2Uploading || !stage2File}
+                onClick={handleStage2Submit}
+                className="w-full py-3.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition-all disabled:opacity-50"
+              >
+                {stage2Uploading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Queuing on Server...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Submit & Sync with Desktop</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCurrentStage(1)}
+                className="w-full text-center text-xs text-slate-500 hover:text-slate-800 font-medium mt-2 py-1"
+              >
+                ← Back to Stage 1 (Barcode)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── STAGE 3: LIVE DESKTOP SYNC & COMPLETION ─── */}
+        {currentStage === 3 && (
+          <div className="h-full flex flex-col justify-between py-1 space-y-4">
+            <div className="space-y-3">
+              <div className="text-center space-y-1">
+                <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner mb-1">
+                  <CheckCircle2 className="w-8 h-8" />
+                </div>
+                <h2 className="text-lg font-extrabold text-slate-900">
+                  Transferred to Desktop!
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Data from your photos is streaming straight to your desktop product form.
+                </p>
+              </div>
+
+              {/* Progress Pipeline Checklist */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <ScanBarcode className="w-4 h-4 text-violet-600" />
+                    Stage 1: Barcode
+                  </span>
+                  <span
+                    className={`font-semibold text-[11px] px-2 py-0.5 rounded ${
+                      stage1.status === 'COMPLETED'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : stage1.status === 'PROCESSING'
+                        ? 'bg-blue-100 text-blue-800 animate-pulse'
+                        : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {stage1.status === 'COMPLETED'
+                      ? `Detected (${productData.barcode || stage1.barcode || 'OK'})`
+                      : stage1.status === 'PROCESSING'
+                      ? 'Analyzing...'
+                      : 'Pending'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-100 pt-2">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4 text-indigo-600" />
+                    Stage 2: Expiry & Batch
+                  </span>
+                  <span
+                    className={`font-semibold text-[11px] px-2 py-0.5 rounded ${
+                      stage2.status === 'COMPLETED'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : stage2.status === 'PROCESSING'
+                        ? 'bg-blue-100 text-blue-800 animate-pulse'
+                        : stage2.status === 'QUEUED'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {stage2.status === 'COMPLETED'
+                      ? 'Extracted'
+                      : stage2.status === 'PROCESSING'
+                      ? 'AI Extracting...'
+                      : stage2.status === 'QUEUED'
+                      ? 'Queued behind Stage 1'
+                      : 'Pending'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-100 pt-2">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <Laptop className="w-4 h-4 text-emerald-600" />
+                    Stage 3: Manual Completion
+                  </span>
+                  <span className="font-semibold text-[11px] text-violet-700 bg-violet-100 px-2 py-0.5 rounded">
+                    Open on Desktop
+                  </span>
+                </div>
+              </div>
+
+              {/* Detected fields summary card */}
+              <div className="bg-slate-900 text-white rounded-2xl p-3.5 space-y-2 text-xs">
+                <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-1.5 text-[11px]">
+                  <span>Live Product Preview</span>
+                  <span className="font-mono text-[10px] text-violet-300">Auto-filled</span>
+                </div>
+
+                <div>
+                  <p className="text-sm font-bold text-white">
+                    {productData.name || 'Awaiting product name...'}
+                  </p>
+                  {productData.generic_name && (
+                    <p className="text-[11px] text-slate-300">{productData.generic_name}</p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Strength:</span>
+                    <span className="font-semibold text-slate-200">{productData.strength || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Dosage Form:</span>
+                    <span className="font-semibold text-slate-200">{productData.dosage_form || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Batch Number:</span>
+                    <span className="font-mono font-bold text-indigo-300">
+                      {productData.batch_number || '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Expiry Date:</span>
+                    <span className="font-mono font-bold text-emerald-400">
+                      {productData.expiry_date || '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Desktop Prompt and Scan Next */}
+            <div className="space-y-2 pt-2">
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-center text-xs font-semibold">
+                🖥️ Look at your desktop screen! Review the pre-filled fields, enter unit price & quantity, and save to inventory.
+              </div>
+
+              <button
+                type="button"
+                onClick={handleScanAnother}
+                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-md transition-all"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Scan Another Medicine
+              </button>
+            </div>
           </div>
         )}
       </main>
 
       {/* Footer */}
-      <footer className="w-full max-w-md mx-auto text-center py-2">
+      <footer className="w-full max-w-md mx-auto text-center py-1">
         <p className="text-[11px] text-slate-400">
-          Connected to TilexPharmacy session <span className="font-mono text-slate-300">{sessionId}</span>
+          Session <span className="font-mono text-slate-300">{sessionId}</span> · TilexPharmacy
         </p>
       </footer>
     </div>
   );
 };
+export default MobileMedicineScanPage;

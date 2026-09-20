@@ -328,23 +328,412 @@ const extractProductFromImage = async (req, res, next) => {
   }
 };
 
+const STAGE_2_EXPIRY_PROMPT = `You are a pharmaceutical inspection assistant. Analyze this photo of a medicine packaging (carton flap, blister foil, bottle label, or stamp).
+Extract the batch/lot number and expiration date:
+{
+  "batch_number": "Batch or Lot number if visible (e.g. B123, LOT9876), or null",
+  "expiry_date": "Expiration date exactly as printed (e.g. 08/2027, 2027-08-31, 31/08/27, AUG 27), or null",
+  "name": "Product name if clearly legible, or null",
+  "strength": "Dosage strength if visible (e.g. 500mg, 100ml), or null",
+  "confidence": 0.0-1.0 confidence score
+}
+Return ONLY valid JSON. Use null for missing values.`;
+
+// In-memory task queues per session for asynchronous non-blocking processing
+const sessionQueues = new Map();
+
+const queueSessionTask = (sessionId, taskFn) => {
+  const current = sessionQueues.get(sessionId) || Promise.resolve();
+  const next = current
+    .then(taskFn)
+    .catch((err) => {
+      console.error(`Error executing session ${sessionId} queue task:`, err);
+    });
+  sessionQueues.set(sessionId, next);
+  return next;
+};
+
 // POST /api/v1/vision/scan-session
 const createScanSession = async (req, res, next) => {
   try {
     const sessionId = `medscan-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    scanSessions.set(sessionId, {
-      status: 'PENDING',
-      data: null,
-      message: null,
+    const session = {
+      id: sessionId,
+      status: 'WAITING_FOR_PHONE', // WAITING_FOR_PHONE | CONNECTED | PROCESSING | COMPLETED | FAILED
+      phoneConnected: false,
+      phoneConnectedAt: null,
+      stage1: {
+        status: 'IDLE', // IDLE | PROCESSING | COMPLETED | FAILED
+        barcode: null,
+        productFound: false,
+        message: null,
+        error: null,
+      },
+      stage2: {
+        status: 'IDLE', // IDLE | QUEUED | PROCESSING | COMPLETED | FAILED
+        batch_number: null,
+        expiry_date: null,
+        message: null,
+        error: null,
+      },
+      productData: {
+        name: '',
+        name_am: '',
+        product_type: 'MEDICINE',
+        generic_name: '',
+        dosage_form: '',
+        strength: '',
+        brand: '',
+        manufacturer: '',
+        unit_price: '',
+        reorder_level: 10,
+        unit: 'strip',
+        barcode: '',
+        sku: '',
+        batch_number: '',
+        expiry_date: '',
+        initial_quantity: '',
+        initial_location: 'STORE',
+        requires_prescription: false,
+        category_id: '',
+        description: '',
+      },
+      fieldSources: {},
+      existingProduct: null,
+      isNewProduct: true,
+      message: 'Waiting for smartphone to scan QR code...',
       error: null,
       createdAt: Date.now(),
-    });
+    };
+
+    scanSessions.set(sessionId, session);
 
     res.json({
       success: true,
       data: {
         sessionId,
         uploadUrl: `/medicine-scan/${sessionId}`,
+        session,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/vision/scan-session/:sessionId/connect
+const connectScanSession = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = scanSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scan session not found or expired' },
+      });
+    }
+
+    session.phoneConnected = true;
+    session.phoneConnectedAt = Date.now();
+    if (session.status === 'WAITING_FOR_PHONE') {
+      session.status = 'CONNECTED';
+      session.message = 'Phone connected! Ready for Stage 1: Barcode Scan.';
+    }
+
+    res.json({
+      success: true,
+      data: session,
+      message: 'Phone connected successfully',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/vision/scan-session/:sessionId/stage1-barcode
+const submitStage1Barcode = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = scanSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scan session not found or expired' },
+      });
+    }
+
+    const { barcode } = req.body || {};
+    if (!barcode && !req.file) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'MISSING_BARCODE', message: 'Barcode string or image is required' },
+      });
+    }
+
+    session.stage1.status = 'PROCESSING';
+    session.status = 'PROCESSING';
+    session.message = 'Processing Stage 1: Reading barcode & product identity...';
+
+    const fileBuffer = req.file ? req.file.buffer : null;
+    const barcodeInput = barcode ? String(barcode).trim() : null;
+
+    // Asynchronously process Stage 1 in the session queue
+    queueSessionTask(sessionId, async () => {
+      try {
+        let code = barcodeInput;
+
+        // If an image was submitted instead of a raw barcode string, use Gemini vision
+        if (!code && fileBuffer) {
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (apiKey) {
+            try {
+              const res = await processMedicineImageBuffer(fileBuffer, apiKey);
+              if (res.data?.extracted?.barcode) {
+                code = res.data.extracted.barcode;
+              }
+              if (res.data?.extracted) {
+                const ext = res.data.extracted;
+                Object.assign(session.productData, {
+                  name: ext.name || session.productData.name,
+                  name_am: ext.name_am || session.productData.name_am,
+                  product_type: ext.product_type || session.productData.product_type,
+                  generic_name: ext.generic_name || session.productData.generic_name,
+                  dosage_form: ext.dosage_form || session.productData.dosage_form,
+                  strength: ext.strength || session.productData.strength,
+                  brand: ext.brand || session.productData.brand,
+                  manufacturer: ext.manufacturer || session.productData.manufacturer,
+                  unit: ext.unit || session.productData.unit,
+                  category_id: res.data.matchedCategoryId || session.productData.category_id,
+                });
+                session.fieldSources.name = 'STAGE_1_VISION';
+              }
+            } catch (vErr) {
+              console.warn('Vision extraction for stage 1 image failed:', vErr.message);
+            }
+          }
+        }
+
+        if (code) {
+          session.stage1.barcode = code;
+          session.productData.barcode = code;
+          session.fieldSources.barcode = 'STAGE_1_BARCODE';
+
+          // Check database for existing product match
+          const existing = await prisma.product.findFirst({
+            where: {
+              OR: [{ barcode: code }, { sku: code }],
+            },
+            include: {
+              category: true,
+              inventory: {
+                select: {
+                  id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
+                },
+                orderBy: { expiry_date: 'asc' },
+              },
+            },
+          });
+
+          if (existing) {
+            session.existingProduct = {
+              id: existing.id,
+              name: existing.name,
+              barcode: existing.barcode,
+              sku: existing.sku,
+              totalStock: existing.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
+              batchCount: existing.inventory.length,
+            };
+            session.isNewProduct = false;
+            session.stage1.productFound = true;
+            session.stage1.message = `Found existing product: "${existing.name}".`;
+
+            // Merge existing product info
+            Object.assign(session.productData, {
+              name: existing.name,
+              name_am: existing.name_am || '',
+              product_type: existing.product_type,
+              generic_name: existing.generic_name || '',
+              dosage_form: existing.dosage_form || '',
+              strength: existing.strength || '',
+              brand: existing.brand || '',
+              manufacturer: existing.manufacturer || '',
+              unit_price: existing.unit_price,
+              unit: existing.unit || 'strip',
+              category_id: existing.category_id || '',
+              requires_prescription: existing.requires_prescription,
+            });
+            session.fieldSources.name = 'EXISTING_DB';
+            session.fieldSources.dosage_form = 'EXISTING_DB';
+            session.fieldSources.strength = 'EXISTING_DB';
+            session.fieldSources.unit_price = 'EXISTING_DB';
+          } else {
+            session.isNewProduct = true;
+            session.stage1.productFound = false;
+            session.stage1.message = `Barcode "${code}" detected (New product).`;
+          }
+        }
+
+        session.stage1.status = 'COMPLETED';
+        if (session.stage2.status !== 'PROCESSING' && session.stage2.status !== 'QUEUED') {
+          session.message = 'Stage 1 Complete: Barcode detected. Ready for Stage 2: Expiry & Batch.';
+        }
+      } catch (err) {
+        console.error('Stage 1 processing error:', err);
+        session.stage1.status = 'FAILED';
+        session.stage1.error = err.message;
+      }
+    });
+
+    // Non-blocking response to the phone
+    res.json({
+      success: true,
+      message: 'Barcode accepted and processing asynchronously',
+      data: {
+        stage1Status: session.stage1.status,
+        barcode: barcodeInput,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/vision/scan-session/:sessionId/stage2-expiry
+const submitStage2Expiry = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = scanSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scan session not found or expired' },
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'NO_IMAGE', message: 'Please upload an image of the expiry date and batch number.' },
+      });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      session.stage2.status = 'FAILED';
+      session.stage2.error = 'Smart scan is not configured. Please add GEMINI_API_KEY to server environment.';
+      return res.status(503).json({
+        success: false,
+        error: { code: 'VISION_NOT_CONFIGURED', message: session.stage2.error },
+      });
+    }
+
+    // If Stage 1 is still processing, mark Stage 2 as QUEUED
+    const isQueued = session.stage1.status === 'PROCESSING';
+    session.stage2.status = isQueued ? 'QUEUED' : 'PROCESSING';
+    session.message = isQueued
+      ? 'Stage 2 Photo Queued: Waiting for Stage 1 to finish...'
+      : 'Stage 2 Photo Received: Analyzing expiry date & batch number...';
+
+    const fileBuffer = req.file.buffer;
+
+    // Enqueue Stage 2 in sequence behind Stage 1
+    queueSessionTask(sessionId, async () => {
+      session.stage2.status = 'PROCESSING';
+      session.message = 'Processing Stage 2: Extracting expiry date & batch number with AI...';
+
+      try {
+        let imageBuffer;
+        try {
+          imageBuffer = await sharp(fileBuffer)
+            .resize({ width: 1024, withoutEnlargement: true })
+            .jpeg({ quality: 85 })
+            .toBuffer();
+        } catch (imgErr) {
+          session.stage2.status = 'FAILED';
+          session.stage2.error = 'Could not process uploaded image.';
+          return;
+        }
+
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const primaryModelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+
+        const imagePart = {
+          inlineData: {
+            data: imageBuffer.toString('base64'),
+            mimeType: 'image/jpeg',
+          },
+        };
+
+        let result;
+        try {
+          const model = genAI.getGenerativeModel({ model: primaryModelName });
+          result = await model.generateContent([STAGE_2_EXPIRY_PROMPT, imagePart]);
+        } catch (modelErr) {
+          console.warn(`Model ${primaryModelName} fallback in stage 2:`, modelErr.message);
+          try {
+            const fallback1 = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+            result = await fallback1.generateContent([STAGE_2_EXPIRY_PROMPT, imagePart]);
+          } catch (e2) {
+            const fallback2 = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+            result = await fallback2.generateContent([STAGE_2_EXPIRY_PROMPT, imagePart]);
+          }
+        }
+
+        const responseText = result.response.text();
+        let extracted = {};
+        try {
+          let jsonStr = responseText.trim();
+          if (jsonStr.startsWith('```')) {
+            jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+          }
+          extracted = JSON.parse(jsonStr);
+        } catch (parseErr) {
+          console.error('Stage 2 JSON parse error:', responseText);
+        }
+
+        if (extracted.expiry_date) {
+          const normalized = normalizeExpiryDateString(extracted.expiry_date);
+          session.productData.expiry_date = normalized || extracted.expiry_date;
+          session.stage2.expiry_date = session.productData.expiry_date;
+          session.fieldSources.expiry_date = 'STAGE_2_VISION';
+        }
+
+        if (extracted.batch_number) {
+          session.productData.batch_number = extracted.batch_number;
+          session.stage2.batch_number = extracted.batch_number;
+          session.fieldSources.batch_number = 'STAGE_2_VISION';
+        }
+
+        if (!session.productData.name && extracted.name) {
+          session.productData.name = extracted.name;
+          session.fieldSources.name = 'STAGE_2_VISION';
+        }
+
+        if (!session.productData.strength && extracted.strength) {
+          session.productData.strength = extracted.strength;
+          session.fieldSources.strength = 'STAGE_2_VISION';
+        }
+
+        session.stage2.status = 'COMPLETED';
+        session.status = 'COMPLETED';
+        session.message = 'All stages complete! Expiry and batch data ready.';
+      } catch (err) {
+        console.error('Stage 2 processing error:', err);
+        session.stage2.status = 'FAILED';
+        session.stage2.error = err.message;
+      }
+    });
+
+    // Immediate 202 Accepted response — non-blocking!
+    res.status(202).json({
+      success: true,
+      queued: true,
+      message: 'Stage 2 photo queued for analysis',
+      data: {
+        stage2Status: session.stage2.status,
       },
     });
   } catch (err) {
@@ -374,7 +763,7 @@ const getScanSessionStatus = async (req, res, next) => {
   }
 };
 
-// POST /api/v1/vision/scan-session/:sessionId
+// POST /api/v1/vision/scan-session/:sessionId (Legacy backwards-compatible single photo upload)
 const uploadScanSessionImage = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
@@ -404,13 +793,22 @@ const uploadScanSessionImage = async (req, res, next) => {
       });
     }
 
-    session.status = 'ANALYZING';
+    session.status = 'PROCESSING';
 
     try {
       const result = await processMedicineImageBuffer(req.file.buffer, apiKey);
       session.status = 'COMPLETED';
       session.data = result.data;
       session.message = result.message;
+
+      // Merge into productData
+      if (result.data?.extracted) {
+        Object.assign(session.productData, result.data.extracted);
+      }
+      if (result.data?.existingProduct) {
+        session.existingProduct = result.data.existingProduct;
+        session.isNewProduct = false;
+      }
 
       res.json({
         success: true,
@@ -508,4 +906,7 @@ module.exports = {
   createScanSession,
   getScanSessionStatus,
   uploadScanSessionImage,
+  connectScanSession,
+  submitStage1Barcode,
+  submitStage2Expiry,
 };

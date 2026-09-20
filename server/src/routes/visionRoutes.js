@@ -8,6 +8,9 @@ const {
   createScanSession,
   getScanSessionStatus,
   uploadScanSessionImage,
+  connectScanSession,
+  submitStage1Barcode,
+  submitStage2Expiry,
 } = require('../controllers/visionController');
 
 const router = express.Router();
@@ -59,7 +62,27 @@ router.get(
   getScanSessionStatus
 );
 
-// POST /api/v1/vision/scan-session/:sessionId — Phone uploads medicine photo
+// POST /api/v1/vision/scan-session/:sessionId/connect — Phone notifies desktop of connection
+router.post(
+  '/scan-session/:sessionId/connect',
+  connectScanSession
+);
+
+// POST /api/v1/vision/scan-session/:sessionId/stage1-barcode — Phone submits barcode (string or image)
+router.post(
+  '/scan-session/:sessionId/stage1-barcode',
+  upload.single('image'),
+  submitStage1Barcode
+);
+
+// POST /api/v1/vision/scan-session/:sessionId/stage2-expiry — Phone submits expiry/batch photo (non-blocking)
+router.post(
+  '/scan-session/:sessionId/stage2-expiry',
+  upload.single('image'),
+  submitStage2Expiry
+);
+
+// POST /api/v1/vision/scan-session/:sessionId — Legacy single-photo upload
 router.post(
   '/scan-session/:sessionId',
   upload.single('image'),
