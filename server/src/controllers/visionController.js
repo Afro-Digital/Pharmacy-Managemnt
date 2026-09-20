@@ -3,11 +3,16 @@ const sharp = require('sharp');
 const prisma = require('../config/database');
 
 // Reuse normalizeExpiryDateString from productController scope — inlined here to avoid circular deps
+// Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, "07 2027", "EXP 07/2027", "07/27", Excel serials, textual dates
 const normalizeExpiryDateString = (rawInput) => {
   if (!rawInput && rawInput !== 0) return null;
-  const str = String(rawInput).trim();
+  let str = String(rawInput).trim();
   if (!str) return null;
 
+  // Clean common prefixes like EXP, EXP., EXPIRY, BB, BBD, B.N., MFG, LOT, etc.
+  str = str.replace(/^(?:exp(?:iry|\.|\b)?|bb(?:d)?|best\s*before|use\s*by|mfg|lot)[:.\s]*/i, '').trim();
+
+  // 1. Excel serial number (numeric integer 30000 - 70000)
   if (/^\d{5}$/.test(str)) {
     const num = parseInt(str, 10);
     if (num >= 30000 && num <= 70000) {
@@ -16,7 +21,8 @@ const normalizeExpiryDateString = (rawInput) => {
     }
   }
 
-  const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  // 2. YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD or YYYY MM DD
+  const ymdMatch = str.match(/^(\d{4})[-/.\s]+(\d{1,2})[-/.\s]+(\d{1,2})$/);
   if (ymdMatch) {
     const y = parseInt(ymdMatch[1], 10);
     const m = parseInt(ymdMatch[2], 10);
@@ -26,7 +32,8 @@ const normalizeExpiryDateString = (rawInput) => {
     }
   }
 
-  const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  // 3. DD-MM-YYYY or MM-DD-YYYY with [-/.\s]
+  const dmyMatch = str.match(/^(\d{1,2})[-/.\s]+(\d{1,2})[-/.\s]+(\d{4})$/);
   if (dmyMatch) {
     const p1 = parseInt(dmyMatch[1], 10);
     const p2 = parseInt(dmyMatch[2], 10);
@@ -39,25 +46,71 @@ const normalizeExpiryDateString = (rawInput) => {
     }
   }
 
-  const myMatch = str.match(/^(\d{1,2})[-/.](\d{4})$/);
+  // 4. DD-MM-YY with 2-digit year: e.g. 31/08/27, 31 08 27
+  const dmy2Match = str.match(/^(\d{1,2})[-/.\s]+(\d{1,2})[-/.\s]+(\d{2})$/);
+  if (dmy2Match) {
+    const p1 = parseInt(dmy2Match[1], 10);
+    const p2 = parseInt(dmy2Match[2], 10);
+    const y = 2000 + parseInt(dmy2Match[3], 10);
+    let day = p1, month = p2;
+    if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
+    else if (p2 > 12 && p1 <= 12) { month = p1; day = p2; }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  // 5. Month & Year: "07 2027", "07/2027", "07-2027", "7 2027" (defaults to last day of month)
+  const myMatch = str.match(/^(\d{1,2})[-/.\s]+(\d{4})$/);
   if (myMatch) {
     const m = parseInt(myMatch[1], 10);
     const y = parseInt(myMatch[2], 10);
-    if (m >= 1 && m <= 12) {
-      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-    }
-  }
-  const ymMatch = str.match(/^(\d{4})[-/.](\d{1,2})$/);
-  if (ymMatch) {
-    const y = parseInt(ymMatch[1], 10);
-    const m = parseInt(ymMatch[2], 10);
-    if (m >= 1 && m <= 12) {
+    if (m >= 1 && m <= 12 && y >= 1990 && y <= 2100) {
       const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
       return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     }
   }
 
+  // 6. Year & Month: "2027 07", "2027/07", "2027-07"
+  const ymMatch = str.match(/^(\d{4})[-/.\s]+(\d{1,2})$/);
+  if (ymMatch) {
+    const y = parseInt(ymMatch[1], 10);
+    const m = parseInt(ymMatch[2], 10);
+    if (m >= 1 && m <= 12 && y >= 1990 && y <= 2100) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 7. 2-digit month & 2-digit year: "07/27", "07 27", "07-27"
+  const my2Match = str.match(/^(\d{1,2})[-/.\s]+(\d{2})$/);
+  if (my2Match) {
+    const m = parseInt(my2Match[1], 10);
+    const y = 2000 + parseInt(my2Match[2], 10);
+    if (m >= 1 && m <= 12 && y >= 2000 && y <= 2099) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 8. Textual month: "Jul 2027", "July 2027", "JUL 27", "2027-Jul"
+  const monthNames = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+    jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  };
+  const textMonthMatch = str.match(/([a-zA-Z]{3,9})[-/.\s]+(\d{2,4})|(\d{2,4})[-/.\s]+([a-zA-Z]{3,9})/i);
+  if (textMonthMatch) {
+    const mStr = (textMonthMatch[1] || textMonthMatch[4]).toLowerCase().substring(0, 3);
+    let y = parseInt(textMonthMatch[2] || textMonthMatch[3], 10);
+    if (y < 100) y += 2000;
+    const m = monthNames[mStr];
+    if (m && y >= 1990 && y <= 2100) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 9. Standard Date parse
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
     const y = parsed.getFullYear();
@@ -186,7 +239,7 @@ const processMedicineImageBuffer = async (buffer, apiKey) => {
   if (extracted.expiry_date) {
     const normalized = normalizeExpiryDateString(extracted.expiry_date);
     extracted.expiry_date_raw = extracted.expiry_date;
-    extracted.expiry_date = normalized || extracted.expiry_date;
+    extracted.expiry_date = normalized || null;
   }
 
   // Post-process: normalize product_type
@@ -821,6 +874,8 @@ const submitStage1Barcode = async (req, res, next) => {
                 session.fieldSources.name = 'STAGE_1_PACKAGING_SCAN';
                 session.fieldSources.dosage_form = 'STAGE_1_PACKAGING_SCAN';
                 session.fieldSources.strength = 'STAGE_1_PACKAGING_SCAN';
+                if (ext.expiry_date) session.fieldSources.expiry_date = 'STAGE_1_PACKAGING_SCAN';
+                if (ext.batch_number) session.fieldSources.batch_number = 'STAGE_1_PACKAGING_SCAN';
               }
             } catch (vErr) {
               console.warn('Packaging extraction failed:', vErr.message);
@@ -1048,8 +1103,8 @@ const submitStage2Expiry = async (req, res, next) => {
 
         if (extracted.expiry_date) {
           const normalized = normalizeExpiryDateString(extracted.expiry_date);
-          session.productData.expiry_date = normalized || extracted.expiry_date;
-          session.stage2.expiry_date = session.productData.expiry_date;
+          session.productData.expiry_date = normalized || null;
+          session.stage2.expiry_date = normalized || extracted.expiry_date;
           session.fieldSources.expiry_date = 'STAGE_2_VISION';
         }
 

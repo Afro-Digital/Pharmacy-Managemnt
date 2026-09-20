@@ -22,6 +22,125 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../services/api';
 
+// Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, "07 2027", "EXP 07/2027", "07/27", Excel serials, textual dates
+const normalizeExpiryDateString = (rawInput) => {
+  if (!rawInput && rawInput !== 0) return null;
+  let str = String(rawInput).trim();
+  if (!str) return null;
+
+  // Clean common prefixes
+  str = str.replace(/^(?:exp(?:iry|\.|\b)?|bb(?:d)?|best\s*before|use\s*by|mfg|lot)[:.\s]*/i, '').trim();
+
+  // 1. Excel serial number (30000 - 70000)
+  if (/^\d{5}$/.test(str)) {
+    const num = parseInt(str, 10);
+    if (num >= 30000 && num <= 70000) {
+      const date = new Date(Math.round((num - 25569) * 86400 * 1000));
+      return date.toISOString().split('T')[0];
+    }
+  }
+
+  // 2. YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD or YYYY MM DD
+  const ymdMatch = str.match(/^(\d{4})[-/.\s]+(\d{1,2})[-/.\s]+(\d{1,2})$/);
+  if (ymdMatch) {
+    const y = parseInt(ymdMatch[1], 10);
+    const m = parseInt(ymdMatch[2], 10);
+    const d = parseInt(ymdMatch[3], 10);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  // 3. DD-MM-YYYY or MM-DD-YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[-/.\s]+(\d{1,2})[-/.\s]+(\d{4})$/);
+  if (dmyMatch) {
+    const p1 = parseInt(dmyMatch[1], 10);
+    const p2 = parseInt(dmyMatch[2], 10);
+    const y = parseInt(dmyMatch[3], 10);
+    let day = p1, month = p2;
+    if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
+    else if (p2 > 12 && p1 <= 12) { month = p1; day = p2; }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  // 4. DD-MM-YY with 2-digit year
+  const dmy2Match = str.match(/^(\d{1,2})[-/.\s]+(\d{1,2})[-/.\s]+(\d{2})$/);
+  if (dmy2Match) {
+    const p1 = parseInt(dmy2Match[1], 10);
+    const p2 = parseInt(dmy2Match[2], 10);
+    const y = 2000 + parseInt(dmy2Match[3], 10);
+    let day = p1, month = p2;
+    if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
+    else if (p2 > 12 && p1 <= 12) { month = p1; day = p2; }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  // 5. Month & Year: "07 2027", "07/2027", "07-2027", "7 2027"
+  const myMatch = str.match(/^(\d{1,2})[-/.\s]+(\d{4})$/);
+  if (myMatch) {
+    const m = parseInt(myMatch[1], 10);
+    const y = parseInt(myMatch[2], 10);
+    if (m >= 1 && m <= 12 && y >= 1990 && y <= 2100) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 6. Year & Month: "2027 07", "2027/07", "2027-07"
+  const ymMatch = str.match(/^(\d{4})[-/.\s]+(\d{1,2})$/);
+  if (ymMatch) {
+    const y = parseInt(ymMatch[1], 10);
+    const m = parseInt(ymMatch[2], 10);
+    if (m >= 1 && m <= 12 && y >= 1990 && y <= 2100) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 7. 2-digit month & 2-digit year: "07/27", "07 27", "07-27"
+  const my2Match = str.match(/^(\d{1,2})[-/.\s]+(\d{2})$/);
+  if (my2Match) {
+    const m = parseInt(my2Match[1], 10);
+    const y = 2000 + parseInt(my2Match[2], 10);
+    if (m >= 1 && m <= 12 && y >= 2000 && y <= 2099) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 8. Textual month: "Jul 2027", "July 2027", "JUL 27"
+  const monthNames = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+    jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  };
+  const textMonthMatch = str.match(/([a-zA-Z]{3,9})[-/.\s]+(\d{2,4})|(\d{2,4})[-/.\s]+([a-zA-Z]{3,9})/i);
+  if (textMonthMatch) {
+    const mStr = (textMonthMatch[1] || textMonthMatch[4]).toLowerCase().substring(0, 3);
+    let y = parseInt(textMonthMatch[2] || textMonthMatch[3], 10);
+    if (y < 100) y += 2000;
+    const m = monthNames[mStr];
+    if (m && y >= 1990 && y <= 2100) {
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
+  }
+
+  // 9. Standard Date parse
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    if (y >= 1990 && y <= 2100) {
+      return `${y}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+};
+
 export const MobileMedicineScanPage = () => {
   const { sessionId } = useParams();
 
@@ -285,11 +404,11 @@ export const MobileMedicineScanPage = () => {
               {stage1.status === 'COMPLETED' ? (
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
               ) : (
-                <ScanBarcode className="w-3.5 h-3.5" />
+                <Sparkles className="w-3.5 h-3.5" />
               )}
               <span>Stage 1</span>
             </div>
-            <span className="text-[9px] opacity-80 leading-none">Barcode</span>
+            <span className="text-[9px] opacity-80 leading-none">Product Image</span>
           </button>
 
           {/* Stage 2 Pill */}
@@ -345,10 +464,10 @@ export const MobileMedicineScanPage = () => {
                   <Sparkles className="w-6 h-6" />
                 </div>
                 <h2 className="text-lg font-extrabold text-slate-900 flex items-center justify-center gap-1.5">
-                  Stage 1: Google Lens Medicine Scan
+                  Stage 1: Capture Entire Product Image
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Point camera at the <strong>front of the medicine box</strong> (showing medicine name, strength & barcode). Like Google Lens, our AI instantly reads the product details and barcode together!
+                  Point camera at the <strong>entire medicine box or bottle</strong> (showing medicine name, strength & details). Our AI extracts all information including expiry date automatically!
                 </p>
               </div>
 
@@ -377,7 +496,7 @@ export const MobileMedicineScanPage = () => {
                       alt="Packaging snap"
                       className="w-full h-full object-contain"
                     />
-                    {/* Google Lens Reticle Overlay */}
+                    {/* Reticle Overlay */}
                     <div className="absolute inset-3 border border-white/40 rounded-xl pointer-events-none flex flex-col justify-between p-2">
                       <div className="flex justify-between">
                         <div className="w-5 h-5 border-t-2 border-l-2 border-violet-400 rounded-tl" />
@@ -390,7 +509,7 @@ export const MobileMedicineScanPage = () => {
                     </div>
                     <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[10px] text-white font-medium flex items-center gap-1.5">
                       <Sparkles className="w-3 h-3 text-violet-400" />
-                      Google Lens Scan Ready
+                      AI Product Scan Ready
                     </div>
                   </div>
 
@@ -417,7 +536,7 @@ export const MobileMedicineScanPage = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {/* Google Lens Snap Box */}
+                  {/* Entire Product Snap Box */}
                   <button
                     type="button"
                     onClick={() => stage1CameraRef.current?.click()}
@@ -434,10 +553,10 @@ export const MobileMedicineScanPage = () => {
                     </div>
                     <div className="text-center">
                       <span className="text-sm font-bold block text-slate-900">
-                        📸 Snap Medicine Packaging
+                        📸 Snap Entire Product Packaging
                       </span>
                       <span className="text-[11px] text-slate-500 mt-0.5 block max-w-xs">
-                        Keep medicine name, strength & barcode in frame
+                        Frame the entire box or bottle (name, strength & details)
                       </span>
                     </div>
                   </button>
@@ -448,13 +567,13 @@ export const MobileMedicineScanPage = () => {
                     className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-2"
                   >
                     <Upload className="w-3.5 h-3.5 text-slate-500" />
-                    Upload packaging photo from gallery
+                    Upload product photo from gallery
                   </button>
 
                   {/* Manual Barcode Fallback */}
                   <div className="pt-2 border-t border-slate-100">
                     <label className="text-[11px] font-semibold text-slate-500 block mb-1">
-                      Or type barcode digits (optional if not visible):
+                      Or type barcode digits (optional if visible):
                     </label>
                     <input
                       type="text"
@@ -486,12 +605,12 @@ export const MobileMedicineScanPage = () => {
                 {stage1Uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Analyzing Packaging with Google Lens AI...</span>
+                    <span>Analyzing Entire Product with AI...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 text-violet-200" />
-                    <span>Scan Packaging & Continue to Expiry</span>
+                    <span>Analyze Product Image & Continue</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
@@ -502,7 +621,7 @@ export const MobileMedicineScanPage = () => {
                 onClick={() => setCurrentStage(2)}
                 className="w-full text-center text-xs text-slate-500 hover:text-violet-600 font-medium mt-2 py-1"
               >
-                Skip to Stage 2 (No barcode on packaging) →
+                Skip to Stage 2 (Close-up Expiry Stamp) →
               </button>
             </div>
           </div>
@@ -522,15 +641,41 @@ export const MobileMedicineScanPage = () => {
                 </div>
               )}
 
-              {stage1.status === 'COMPLETED' && stage1.barcode && (
+              {stage1.status === 'COMPLETED' && (
                 <div className="mb-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs flex items-center justify-between shadow-xs">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Barcode: <strong className="font-mono">{stage1.barcode}</strong></span>
+                    <span>Product: <strong>{productData.name || 'Identified'}</strong></span>
                   </div>
                   <span className="text-[10px] bg-emerald-200 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
-                    Stage 1 OK
+                    Stage 1 Done
                   </span>
+                </div>
+              )}
+
+              {/* Auto-detected Expiry from Stage 1 packaging */}
+              {productData.expiry_date && (
+                <div className="mb-3 p-3 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-2xl text-emerald-950 text-xs shadow-xs">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-800">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Expiry Date Auto-Detected!</span>
+                    </div>
+                    <span className="font-mono font-bold text-xs bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-md">
+                      {normalizeExpiryDateString(productData.expiry_date) || productData.expiry_date}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-emerald-700 mb-2.5">
+                    AI extracted the expiry date from your product packaging. You can proceed directly to desktop sync or take a close-up photo to confirm.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentStage(3)}
+                    className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                  >
+                    <span>Use Auto-Detected Expiry & Finish Intake</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               )}
 
@@ -539,10 +684,10 @@ export const MobileMedicineScanPage = () => {
                   <Calendar className="w-6 h-6" />
                 </div>
                 <h2 className="text-lg font-extrabold text-slate-900">
-                  Stage 2: Expiry & Batch Capture
+                  Stage 2: Expiry & Batch Verification
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Point camera at the printed stamp showing <strong>EXP date</strong> and <strong>Batch/Lot No.</strong>
+                  Point camera at the printed stamp showing <strong>EXP date</strong> and <strong>Batch/Lot No.</strong> (optional if already detected)
                 </p>
               </div>
 
@@ -664,7 +809,7 @@ export const MobileMedicineScanPage = () => {
                 onClick={() => setCurrentStage(1)}
                 className="w-full text-center text-xs text-slate-500 hover:text-slate-800 font-medium mt-2 py-1"
               >
-                ← Back to Stage 1 (Barcode)
+                ← Back to Stage 1 (Product Image)
               </button>
             </div>
           </div>
@@ -690,8 +835,8 @@ export const MobileMedicineScanPage = () => {
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2.5 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                    <ScanBarcode className="w-4 h-4 text-violet-600" />
-                    Stage 1: Barcode
+                    <Sparkles className="w-4 h-4 text-violet-600" />
+                    Stage 1: Product Image
                   </span>
                   <span
                     className={`font-semibold text-[11px] px-2 py-0.5 rounded ${
@@ -703,7 +848,7 @@ export const MobileMedicineScanPage = () => {
                     }`}
                   >
                     {stage1.status === 'COMPLETED'
-                      ? `Detected (${productData.barcode || stage1.barcode || 'OK'})`
+                      ? `Detected (${productData.name || 'OK'})`
                       : stage1.status === 'PROCESSING'
                       ? 'Analyzing...'
                       : 'Pending'}
@@ -781,7 +926,7 @@ export const MobileMedicineScanPage = () => {
                   <div>
                     <span className="text-slate-400 block text-[10px]">Expiry Date:</span>
                     <span className="font-mono font-bold text-emerald-400">
-                      {productData.expiry_date || '—'}
+                      {normalizeExpiryDateString(productData.expiry_date) || productData.expiry_date || '—'}
                     </span>
                   </div>
                 </div>

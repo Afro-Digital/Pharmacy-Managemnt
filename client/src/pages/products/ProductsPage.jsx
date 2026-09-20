@@ -226,8 +226,8 @@ export const ProductsPage = () => {
                 for (const [k, v] of Object.entries(session.productData)) {
                   if (v != null && v !== '' && !liveManuallyEditedFieldsRef.current.has(k)) {
                     if (k === 'expiry_date') {
-                      const norm = normalizeExpiryDateString(v) || v;
-                      if (updated[k] !== norm) {
+                      const norm = normalizeExpiryDateString(v);
+                      if (norm && updated[k] !== norm) {
                         updated[k] = norm;
                         changed = true;
                       }
@@ -254,25 +254,26 @@ export const ProductsPage = () => {
     };
   }, [scanModalOpen, scanMode, phoneSessionId, liveFormSuccess]);
 
-  // Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, Excel serials, MM/YYYY, textual dates
+  // Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, "07 2027", "EXP 07/2027", "07/27", Excel serials, textual dates
   const normalizeExpiryDateString = (rawInput) => {
     if (!rawInput && rawInput !== 0) return null;
-    const str = String(rawInput).trim();
+    let str = String(rawInput).trim();
     if (!str) return null;
+
+    // Clean common prefixes like EXP, EXP., EXPIRY, BB, BBD, B.N., MFG, LOT, etc.
+    str = str.replace(/^(?:exp(?:iry|\.|\b)?|bb(?:d)?|best\s*before|use\s*by|mfg|lot)[:.\s]*/i, '').trim();
 
     // 1. Excel serial number (numeric integer 30000 - 70000)
     if (/^\d{5}$/.test(str)) {
       const num = parseInt(str, 10);
       if (num >= 30000 && num <= 70000) {
         const d = new Date(Math.round((num - 25569) * 86400 * 1000));
-        if (!isNaN(d.getTime())) {
-          return d.toISOString().split('T')[0];
-        }
+        if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
       }
     }
 
-    // 2. YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
-    const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    // 2. YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD or YYYY MM DD
+    const ymdMatch = str.match(/^(\d{4})[-/.\s]+(\d{1,2})[-/.\s]+(\d{1,2})$/);
     if (ymdMatch) {
       const y = parseInt(ymdMatch[1], 10);
       const m = parseInt(ymdMatch[2], 10);
@@ -282,91 +283,90 @@ export const ProductsPage = () => {
       }
     }
 
-    // 3. DD/MM/YYYY or MM/DD/YYYY or DD-MM-YYYY or DD.MM.YYYY
-    const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    // 3. DD-MM-YYYY or MM-DD-YYYY with [-/.\s]
+    const dmyMatch = str.match(/^(\d{1,2})[-/.\s]+(\d{1,2})[-/.\s]+(\d{4})$/);
     if (dmyMatch) {
       const p1 = parseInt(dmyMatch[1], 10);
       const p2 = parseInt(dmyMatch[2], 10);
       const y = parseInt(dmyMatch[3], 10);
-
-      let day = p1;
-      let month = p2;
-      if (p1 > 12 && p2 <= 12) {
-        day = p1;
-        month = p2;
-      } else if (p2 > 12 && p1 <= 12) {
-        month = p1;
-        day = p2;
-      } else if (p1 <= 12 && p2 <= 12) {
-        // Default to DD/MM/YYYY (standard in Ethiopia & international pharma)
-        day = p1;
-        month = p2;
-      }
-
+      let day = p1, month = p2;
+      if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
+      else if (p2 > 12 && p1 <= 12) { month = p1; day = p2; }
       if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
         return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       }
     }
 
-    // 4. 2-digit year: DD/MM/YY or MM/DD/YY (e.g. 31/08/27)
-    const dmy2Match = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2})$/);
+    // 4. DD-MM-YY with 2-digit year: e.g. 31/08/27, 31 08 27
+    const dmy2Match = str.match(/^(\d{1,2})[-/.\s]+(\d{1,2})[-/.\s]+(\d{2})$/);
     if (dmy2Match) {
       const p1 = parseInt(dmy2Match[1], 10);
       const p2 = parseInt(dmy2Match[2], 10);
       const y = 2000 + parseInt(dmy2Match[3], 10);
-
-      let day = p1;
-      let month = p2;
-      if (p1 > 12 && p2 <= 12) {
-        day = p1;
-        month = p2;
-      } else if (p2 > 12 && p1 <= 12) {
-        month = p1;
-        day = p2;
-      }
-
+      let day = p1, month = p2;
+      if (p1 > 12 && p2 <= 12) { day = p1; month = p2; }
+      else if (p2 > 12 && p1 <= 12) { month = p1; day = p2; }
       if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
         return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       }
     }
 
-    // 5. Month & Year only: MM/YYYY, MM-YYYY, YYYY-MM, MM/YY (pharma blister packs)
-    const myMatch = str.match(/^(\d{1,2})[-/.](\d{4})$/);
+    // 5. Month & Year: "07 2027", "07/2027", "07-2027", "7 2027" (defaults to last day of month)
+    const myMatch = str.match(/^(\d{1,2})[-/.\s]+(\d{4})$/);
     if (myMatch) {
       const m = parseInt(myMatch[1], 10);
       const y = parseInt(myMatch[2], 10);
-      if (m >= 1 && m <= 12) {
-        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-      }
-    }
-    const ymMatch = str.match(/^(\d{4})[-/.](\d{1,2})$/);
-    if (ymMatch) {
-      const y = parseInt(ymMatch[1], 10);
-      const m = parseInt(ymMatch[2], 10);
-      if (m >= 1 && m <= 12) {
-        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-      }
-    }
-    const my2Match = str.match(/^(\d{1,2})[-/.](\d{2})$/);
-    if (my2Match) {
-      const m = parseInt(my2Match[1], 10);
-      const y = 2000 + parseInt(my2Match[2], 10);
-      if (m >= 1 && m <= 12) {
+      if (m >= 1 && m <= 12 && y >= 1990 && y <= 2100) {
         const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
         return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
       }
     }
 
-    // 6. Textual dates (e.g. 31-Aug-2027, August 31 2027) or native JS Date fallback
+    // 6. Year & Month: "2027 07", "2027/07", "2027-07"
+    const ymMatch = str.match(/^(\d{4})[-/.\s]+(\d{1,2})$/);
+    if (ymMatch) {
+      const y = parseInt(ymMatch[1], 10);
+      const m = parseInt(ymMatch[2], 10);
+      if (m >= 1 && m <= 12 && y >= 1990 && y <= 2100) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+
+    // 7. 2-digit month & 2-digit year: "07/27", "07 27", "07-27"
+    const my2Match = str.match(/^(\d{1,2})[-/.\s]+(\d{2})$/);
+    if (my2Match) {
+      const m = parseInt(my2Match[1], 10);
+      const y = 2000 + parseInt(my2Match[2], 10);
+      if (m >= 1 && m <= 12 && y >= 2000 && y <= 2099) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+
+    // 8. Textual month: "Jul 2027", "July 2027", "JUL 27", "2027-Jul"
+    const monthNames = {
+      jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+      jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+    };
+    const textMonthMatch = str.match(/([a-zA-Z]{3,9})[-/.\s]+(\d{2,4})|(\d{2,4})[-/.\s]+([a-zA-Z]{3,9})/i);
+    if (textMonthMatch) {
+      const mStr = (textMonthMatch[1] || textMonthMatch[4]).toLowerCase().substring(0, 3);
+      let y = parseInt(textMonthMatch[2] || textMonthMatch[3], 10);
+      if (y < 100) y += 2000;
+      const m = monthNames[mStr];
+      if (m && y >= 1990 && y <= 2100) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+
+    // 9. Standard Date parse
     const parsed = new Date(str);
     if (!isNaN(parsed.getTime())) {
       const y = parsed.getFullYear();
       if (y >= 1990 && y <= 2100) {
-        const m = String(parsed.getMonth() + 1).padStart(2, '0');
-        const d = String(parsed.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
+        return `${y}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
       }
     }
 
@@ -2148,7 +2148,7 @@ export const ProductsPage = () => {
                 }`}
               >
                 <Smartphone className="w-4 h-4" />
-                📱 Phone Scan (Two-Stage Intake)
+                📱 Phone Scan (AI Product Intake)
               </button>
               <button
                 type="button"
@@ -2163,7 +2163,7 @@ export const ProductsPage = () => {
                 }`}
               >
                 <Camera className="w-4 h-4" />
-                Direct Photo
+                📸 Direct Product Photo
               </button>
               <button
                 type="button"
@@ -2317,16 +2317,16 @@ export const ProductsPage = () => {
                       ) : liveSession?.stage1?.status === 'PROCESSING' ? (
                         <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
                       ) : (
-                        <ScanBarcode className="w-4 h-4 text-slate-400 shrink-0" />
+                        <Camera className="w-4 h-4 text-slate-400 shrink-0" />
                       )}
                       <div>
-                        <div className="font-bold text-[11px]">Stage 1: Barcode Scan</div>
+                        <div className="font-bold text-[11px]">Step 1: Product Packaging Photo</div>
                         <div className="text-[10px] opacity-80">
-                          {liveSession?.stage1?.barcode
-                            ? `Code: ${liveSession.stage1.barcode}`
+                          {liveSession?.productData?.name
+                            ? `Identified: "${liveSession.productData.name}"`
                             : liveSession?.stage1?.status === 'PROCESSING'
-                            ? 'Analyzing barcode on server...'
-                            : 'Waiting for phone camera snap'}
+                            ? 'AI analyzing product image & expiry date...'
+                            : 'Snap entire product box/bottle'}
                         </div>
                       </div>
                     </div>
@@ -2366,15 +2366,15 @@ export const ProductsPage = () => {
                         <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
                       )}
                       <div>
-                        <div className="font-bold text-[11px]">Stage 2: Expiry & Batch</div>
+                        <div className="font-bold text-[11px]">Step 2: Expiry & Batch Verification</div>
                         <div className="text-[10px] opacity-80">
-                          {liveSession?.stage2?.status === 'COMPLETED'
-                            ? `Batch: ${liveProductForm.batch_number || 'OK'} · Exp: ${liveProductForm.expiry_date || 'OK'}`
+                          {liveProductForm.expiry_date
+                            ? `Expiry: ${liveProductForm.expiry_date}${liveProductForm.batch_number ? ` · Batch: ${liveProductForm.batch_number}` : ''}`
                             : liveSession?.stage2?.status === 'QUEUED'
-                            ? 'Queued behind Stage 1 (async)'
+                            ? 'Queued behind Step 1 (async)'
                             : liveSession?.stage2?.status === 'PROCESSING'
-                            ? 'AI extracting dates & batch...'
-                            : 'Waiting for expiry photo'}
+                            ? 'AI verifying date & batch stamp...'
+                            : 'Snap date stamp if needed'}
                         </div>
                       </div>
                     </div>
@@ -3268,7 +3268,7 @@ export const ProductsPage = () => {
                           manufacturer: ext.manufacturer || '',
                           unit_price: ext.unit_price || '',
                           batch_number: ext.batch_number || '',
-                          expiry_date: ext.expiry_date || '',
+                          expiry_date: formatExpiryForInput(ext.expiry_date),
                           barcode: ext.barcode || '',
                           requires_prescription: ext.requires_prescription === true,
                           unit: ext.unit || 'strip',
