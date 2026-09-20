@@ -451,35 +451,309 @@ const connectScanSession = async (req, res, next) => {
   }
 };
 
-// Fast online barcode lookup fallback (Open Food/Product Facts international database)
-const lookupOnlineBarcode = async (barcode) => {
+// --- Universal Barcode Drug Identification & Enrichment Service ---
+
+// 1. Smart Medicine Title Parser: extracts dosage form, strength, and unit from raw titles
+const parseMedicineTitle = (title) => {
+  if (!title) return {};
+  const result = { name: String(title).trim() };
+
+  // Common dosage forms in pharmaceutical naming
+  const forms = [
+    'Caplet', 'Capsule', 'Tablet', 'Syrup', 'Suspension', 'Injection',
+    'Cream', 'Ointment', 'Drops', 'Inhaler', 'Gel', 'Spray', 'Solution',
+    'Suppository', 'Vial', 'Ampule', 'Lotion', 'Powder', 'Elixir', 'Eye Drops', 'Ear Drops'
+  ];
+  for (const f of forms) {
+    if (new RegExp(`\\b${f}s?\\b`, 'i').test(title)) {
+      result.dosage_form = f;
+      break;
+    }
+  }
+
+  // Strength (e.g. 500mg, 250mg/5ml, 100ml, 1%, 50mcg, 1000 IU, 1g, 10mg)
+  const strengthMatch = title.match(/(\d+(?:\.\d+)?\s*(?:mg|g|ml|mcg|iu|%)(?:\/\d+\s*(?:ml|mg))?)/i);
+  if (strengthMatch) {
+    result.strength = strengthMatch[1].replace(/\s+/g, '');
+  }
+
+  // Packaging unit
+  const units = ['Strip', 'Bottle', 'Box', 'Tube', 'Vial', 'Sachet', 'Ampule', 'Pack', 'Blister'];
+  for (const u of units) {
+    if (new RegExp(`\\b${u}s?\\b`, 'i').test(title)) {
+      result.unit = u.toLowerCase();
+      break;
+    }
+  }
+
+  return result;
+};
+
+// 2. Query UPCitemdb (Global barcode database with millions of pharmaceuticals & health items)
+const lookupUPCItemDB = async (barcode) => {
+  if (!barcode || !/^\d{8,14}$/.test(barcode.trim())) return null;
+  const cleanCode = barcode.trim();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const resp = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${cleanCode}`, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'TilexPharmacy/1.0 (info@tilexpharma.com)' },
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    if (json?.items && json.items.length > 0) {
+      const item = json.items[0];
+      const parsed = parseMedicineTitle(item.title || '');
+      return {
+        name: item.title ? item.title.trim() : null,
+        brand: item.brand ? item.brand.trim() : null,
+        category: item.category || null,
+        description: item.description || null,
+        dosage_form: parsed.dosage_form || null,
+        strength: parsed.strength || null,
+        unit: parsed.unit || null,
+        source: 'UPCITEMDB',
+      };
+    }
+  } catch (e) {
+    // Silently ignore network / timeout errors
+  }
+  return null;
+};
+
+// 3. Query OpenFDA Drug Directory (US FDA NDC registry for pharmaceuticals)
+const lookupOpenFDADrug = async (barcode) => {
   if (!barcode || !/^\d{8,14}$/.test(barcode.trim())) return null;
   const cleanCode = barcode.trim();
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
     const resp = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${cleanCode}.json?fields=product_name,generic_name,brands,quantity,categories`,
+      `https://api.fda.gov/drug/ndc.json?search=packaging.package_ndc:${cleanCode}&limit=1`,
       {
         signal: controller.signal,
-        headers: { 'User-Agent': 'TilexPharmacy/1.0 (info@tilexpharma.com)' },
       }
     );
     clearTimeout(timeout);
     if (!resp.ok) return null;
     const json = await resp.json();
-    if (json?.status === 1 && json.product) {
-      const p = json.product;
+    if (json?.results && json.results.length > 0) {
+      const drug = json.results[0];
       return {
-        name: p.product_name || null,
-        generic_name: p.generic_name || null,
-        brand: p.brands ? p.brands.split(',')[0].trim() : null,
+        name: drug.brand_name || drug.generic_name || null,
+        generic_name: drug.generic_name || null,
+        dosage_form: drug.dosage_form ? drug.dosage_form.split(',')[0].trim() : null,
+        brand: drug.brand_name || drug.labeler_name || null,
+        manufacturer: drug.labeler_name || null,
+        product_type: 'MEDICINE',
+        requires_prescription: drug.product_type ? !drug.product_type.includes('OTC') : true,
+        source: 'OPENFDA',
       };
     }
   } catch (e) {
-    // Silently ignore network or timeout errors
+    // Silently ignore network / timeout errors
   }
   return null;
+};
+
+// 4. Query Open Products Facts & Open Food Facts
+const lookupOpenProductsFacts = async (barcode) => {
+  if (!barcode || !/^\d{8,14}$/.test(barcode.trim())) return null;
+  const cleanCode = barcode.trim();
+  const endpoints = [
+    `https://world.openproductsfacts.org/api/v2/product/${cleanCode}.json?fields=product_name,generic_name,brands,categories,quantity`,
+    `https://world.openfoodfacts.org/api/v2/product/${cleanCode}.json?fields=product_name,generic_name,brands,categories,quantity`,
+  ];
+  for (const url of endpoints) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const resp = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'TilexPharmacy/1.0 (info@tilexpharma.com)' },
+      });
+      clearTimeout(timeout);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json?.status === 1 && json.product?.product_name) {
+          const p = json.product;
+          const parsed = parseMedicineTitle(p.product_name);
+          return {
+            name: p.product_name.trim(),
+            generic_name: p.generic_name ? p.generic_name.trim() : null,
+            brand: p.brands ? p.brands.split(',')[0].trim() : null,
+            dosage_form: parsed.dosage_form || null,
+            strength: parsed.strength || null,
+            unit: parsed.unit || null,
+            source: 'OPEN_PRODUCTS_FACTS',
+          };
+        }
+      }
+    } catch (e) {
+      // Continue to next endpoint
+    }
+  }
+  return null;
+};
+
+// 5. Query Gemini Generative AI for Drug Identification by Barcode (and optional photo)
+const identifyDrugWithGemini = async ({ barcode, apiKey, imageBuffer, hintTitle }) => {
+  if (!apiKey) return null;
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const primaryModelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+
+    const prompt = `You are an expert clinical pharmacist and pharmaceutical catalog AI.
+The user scanned a medicine/health product with barcode number: "${barcode || 'N/A'}"
+${hintTitle ? `Database lookup hint for this barcode: "${hintTitle}"` : ''}
+${imageBuffer ? 'An image of the barcode / packaging is attached for visual inspection.' : ''}
+
+Task: Identify the exact medicine/drug product associated with this barcode or photo.
+Return ONLY a valid JSON object with the following fields:
+{
+  "found": true,
+  "name": "Full official commercial medicine name (e.g. Augmentin 625mg, Panadol Extra, Amoxicillin 500mg, Tylenol 500mg)",
+  "name_am": "Amharic name if known in Ethiopian pharmacy practice, otherwise null",
+  "generic_name": "Active pharmaceutical ingredient / INN (e.g. Amoxicillin + Clavulanate, Paracetamol, Ibuprofen)",
+  "dosage_form": "Tablet, Capsule, Syrup, Suspension, Injection, Cream, Ointment, Drops, Inhaler, Gel, Solution, etc.",
+  "strength": "Dosage strength with unit (e.g. 500mg, 250mg/5ml, 100ml, 1g)",
+  "brand": "Brand name or trademark owner (e.g. GSK, Sanofi, Cipla, Pfizer, Novartis)",
+  "manufacturer": "Manufacturing pharmaceutical company if known",
+  "product_type": "MEDICINE",
+  "unit": "Packaging unit: strip, bottle, box, tube, vial, ampule, sachet",
+  "category": "Therapeutic class (e.g. Antibiotic, Analgesic, Antipyretic, Antacid, Antihistamine, Vitamin)",
+  "requires_prescription": true if Rx / prescription required; false if OTC
+}
+If you cannot identify this barcode as a specific pharmaceutical or health product, return {"found": false}.
+Return ONLY the JSON object, no markdown code fences, no extra text.`;
+
+    const contents = [prompt];
+    if (imageBuffer) {
+      try {
+        const processedImg = await sharp(imageBuffer)
+          .resize({ width: 1024, withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+        contents.push({
+          inlineData: {
+            data: processedImg.toString('base64'),
+            mimeType: 'image/jpeg',
+          },
+        });
+      } catch (e) {
+        // Ignore sharp failure
+      }
+    }
+
+    let resultText = null;
+    const models = [primaryModelName, 'gemini-2.5-flash', 'gemini-1.5-flash'];
+    for (const m of models) {
+      try {
+        const model = genAI.getGenerativeModel({ model: m });
+        const res = await model.generateContent(contents);
+        resultText = res.response.text();
+        if (resultText) break;
+      } catch (e) {
+        console.warn(`Model ${m} barcode lookup failed:`, e.message);
+      }
+    }
+
+    if (!resultText) return null;
+
+    let clean = resultText.trim();
+    if (clean.startsWith('```')) {
+      clean = clean.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+    }
+    const parsed = JSON.parse(clean);
+    if (parsed && parsed.found !== false && parsed.name) {
+      return parsed;
+    }
+  } catch (err) {
+    console.warn('Gemini drug identification error:', err.message);
+  }
+  return null;
+};
+
+// 6. Master Barcode Drug Enrichment Pipeline: queries local DB, external registries & AI
+const enrichMedicineFromBarcode = async ({ barcode, imageBuffer, apiKey }) => {
+  if (!barcode && !imageBuffer) return null;
+  const cleanCode = barcode ? String(barcode).trim() : null;
+
+  // Query global registries in parallel
+  let registryData = null;
+  if (cleanCode && /^\d{6,14}$/.test(cleanCode)) {
+    const [fdaRes, upcRes, openProductsRes] = await Promise.allSettled([
+      lookupOpenFDADrug(cleanCode),
+      lookupUPCItemDB(cleanCode),
+      lookupOpenProductsFacts(cleanCode),
+    ]);
+
+    if (fdaRes.status === 'fulfilled' && fdaRes.value) {
+      registryData = fdaRes.value;
+    } else if (upcRes.status === 'fulfilled' && upcRes.value) {
+      registryData = upcRes.value;
+    } else if (openProductsRes.status === 'fulfilled' && openProductsRes.value) {
+      registryData = openProductsRes.value;
+    }
+  }
+
+  // Query Gemini AI with barcode digits and any registry hint
+  let geminiData = null;
+  if (apiKey) {
+    geminiData = await identifyDrugWithGemini({
+      barcode: cleanCode,
+      apiKey,
+      imageBuffer,
+      hintTitle: registryData?.name || registryData?.brand_name || null,
+    });
+  }
+
+  // Synthesize best available information
+  const finalName = geminiData?.name || registryData?.name || null;
+  if (!finalName && !geminiData) {
+    return null;
+  }
+
+  const parsedFromTitle = parseMedicineTitle(finalName || '');
+
+  const enriched = {
+    barcode: cleanCode || geminiData?.barcode || null,
+    name: finalName,
+    name_am: geminiData?.name_am || null,
+    product_type: geminiData?.product_type || 'MEDICINE',
+    generic_name: geminiData?.generic_name || registryData?.generic_name || null,
+    dosage_form: geminiData?.dosage_form || registryData?.dosage_form || parsedFromTitle.dosage_form || 'Tablet',
+    strength: geminiData?.strength || registryData?.strength || parsedFromTitle.strength || null,
+    brand: geminiData?.brand || registryData?.brand || null,
+    manufacturer: geminiData?.manufacturer || registryData?.manufacturer || null,
+    unit: (geminiData?.unit || registryData?.unit || parsedFromTitle.unit || 'strip').toLowerCase(),
+    category: geminiData?.category || registryData?.category || null,
+    requires_prescription:
+      geminiData?.requires_prescription !== undefined
+        ? geminiData.requires_prescription
+        : registryData?.requires_prescription !== undefined
+        ? registryData.requires_prescription
+        : false,
+    source: geminiData ? 'GEMINI_AI_REGISTRY' : registryData?.source || 'GLOBAL_BARCODE_CATALOG',
+  };
+
+  // Auto-match category from TilexPharmacy database
+  if (enriched.category) {
+    try {
+      const cat = await prisma.category.findFirst({
+        where: {
+          name: { contains: enriched.category, mode: 'insensitive' },
+        },
+      });
+      if (cat) enriched.category_id = cat.id;
+    } catch (e) {
+      // Ignore DB category match error
+    }
+  }
+
+  return enriched;
 };
 
 // POST /api/v1/vision/scan-session/:sessionId/stage1-barcode
@@ -505,7 +779,7 @@ const submitStage1Barcode = async (req, res, next) => {
 
     session.stage1.status = 'PROCESSING';
     session.status = 'PROCESSING';
-    session.message = 'Processing Stage 1: Google Lens scanning packaging & barcode...';
+    session.message = 'Processing Stage 1: Identifying medicine from barcode & packaging...';
 
     const fileBuffer = req.file ? req.file.buffer : null;
     const barcodeInput = barcode ? String(barcode).trim() : null;
@@ -515,7 +789,7 @@ const submitStage1Barcode = async (req, res, next) => {
       try {
         let code = barcodeInput;
 
-        // 1. Google Lens Packaging Analysis: ALWAYS analyze image if uploaded
+        // 1. If an image was submitted, run Gemini Vision packaging extraction
         if (fileBuffer) {
           const apiKey = process.env.GEMINI_API_KEY;
           if (apiKey) {
@@ -526,7 +800,6 @@ const submitStage1Barcode = async (req, res, next) => {
                 if (!code && ext.barcode) {
                   code = ext.barcode;
                 }
-                // Merge Google Lens extraction into session productData
                 Object.assign(session.productData, {
                   name: ext.name || session.productData.name,
                   name_am: ext.name_am || session.productData.name_am,
@@ -545,23 +818,23 @@ const submitStage1Barcode = async (req, res, next) => {
                       : session.productData.requires_prescription,
                   category_id: res.data.matchedCategoryId || session.productData.category_id,
                 });
-                session.fieldSources.name = 'STAGE_1_GOOGLE_LENS';
-                session.fieldSources.dosage_form = 'STAGE_1_GOOGLE_LENS';
-                session.fieldSources.strength = 'STAGE_1_GOOGLE_LENS';
+                session.fieldSources.name = 'STAGE_1_PACKAGING_SCAN';
+                session.fieldSources.dosage_form = 'STAGE_1_PACKAGING_SCAN';
+                session.fieldSources.strength = 'STAGE_1_PACKAGING_SCAN';
               }
             } catch (vErr) {
-              console.warn('Google Lens packaging extraction failed:', vErr.message);
+              console.warn('Packaging extraction failed:', vErr.message);
             }
           }
         }
 
-        // 2. Barcode resolution (Local DB + Global GS1 lookup)
+        // 2. Barcode resolution & Drug Database / AI Enrichment
         if (code) {
           session.stage1.barcode = code;
           session.productData.barcode = code;
           session.fieldSources.barcode = 'STAGE_1_BARCODE';
 
-          // Check database for existing product match
+          // Check local database for existing product match
           const existing = await prisma.product.findFirst({
             where: {
               OR: [{ barcode: code }, { sku: code }],
@@ -610,22 +883,43 @@ const submitStage1Barcode = async (req, res, next) => {
             session.fieldSources.strength = 'EXISTING_DB';
             session.fieldSources.unit_price = 'EXISTING_DB';
           } else {
-            // New product: if name wasn't extracted from image, check online GS1/drug database
-            if (!session.productData.name) {
-              const online = await lookupOnlineBarcode(code);
-              if (online?.name) {
-                session.productData.name = online.name;
-                if (online.generic_name) session.productData.generic_name = online.generic_name;
-                if (online.brand) session.productData.brand = online.brand;
-                session.fieldSources.name = 'ONLINE_GS1_CATALOG';
-              }
-            }
+            // New product: Auto-identify medicine details from barcode via multi-source engine!
+            const apiKey = process.env.GEMINI_API_KEY;
+            const enriched = await enrichMedicineFromBarcode({
+              barcode: code,
+              imageBuffer: fileBuffer,
+              apiKey,
+            });
 
-            session.isNewProduct = true;
-            session.stage1.productFound = false;
-            session.stage1.message = session.productData.name
-              ? `Detected "${session.productData.name}" (Barcode: ${code})`
-              : `Barcode "${code}" detected (New product).`;
+            if (enriched && enriched.name) {
+              Object.assign(session.productData, {
+                barcode: code,
+                name: enriched.name,
+                name_am: enriched.name_am || session.productData.name_am,
+                product_type: enriched.product_type || session.productData.product_type,
+                generic_name: enriched.generic_name || session.productData.generic_name,
+                dosage_form: enriched.dosage_form || session.productData.dosage_form,
+                strength: enriched.strength || session.productData.strength,
+                brand: enriched.brand || session.productData.brand,
+                manufacturer: enriched.manufacturer || session.productData.manufacturer,
+                unit: enriched.unit || session.productData.unit || 'strip',
+                category_id: enriched.category_id || session.productData.category_id,
+                requires_prescription: enriched.requires_prescription,
+              });
+              session.fieldSources.name = enriched.source;
+              session.fieldSources.dosage_form = enriched.source;
+              session.fieldSources.strength = enriched.source;
+
+              session.isNewProduct = true;
+              session.stage1.productFound = false;
+              session.stage1.message = `✨ Auto-identified: "${enriched.name}" (${enriched.strength || ''} ${enriched.dosage_form || ''}) from barcode!`;
+            } else {
+              session.isNewProduct = true;
+              session.stage1.productFound = false;
+              session.stage1.message = session.productData.name
+                ? `Detected "${session.productData.name}" (Barcode: ${code})`
+                : `Barcode "${code}" detected (New product).`;
+            }
           }
         } else if (session.productData.name) {
           session.stage1.message = `Detected product "${session.productData.name}" via packaging scan.`;
@@ -920,10 +1214,45 @@ const lookupBarcode = async (req, res, next) => {
     });
 
     if (!product) {
+      // If not in local database, auto-enrich from global registries & AI!
+      const apiKey = process.env.GEMINI_API_KEY;
+      const cleanCode = barcode.trim();
+      const enriched = await enrichMedicineFromBarcode({ barcode: cleanCode, apiKey });
+
+      if (enriched && enriched.name) {
+        return res.json({
+          success: true,
+          data: {
+            found: false,
+            enriched: true,
+            barcode: cleanCode,
+            product: {
+              name: enriched.name,
+              name_am: enriched.name_am || '',
+              product_type: enriched.product_type || 'MEDICINE',
+              generic_name: enriched.generic_name || '',
+              dosage_form: enriched.dosage_form || 'Tablet',
+              strength: enriched.strength || '',
+              brand: enriched.brand || '',
+              manufacturer: enriched.manufacturer || '',
+              unit_price: '',
+              unit: enriched.unit || 'strip',
+              barcode: cleanCode,
+              sku: cleanCode,
+              category_id: enriched.category_id || '',
+              category: enriched.category ? { name: enriched.category } : null,
+              requires_prescription: enriched.requires_prescription || false,
+              source: enriched.source,
+            },
+          },
+          message: `✨ Identified "${enriched.name}" (${enriched.strength || ''} ${enriched.dosage_form || ''}) from barcode!`,
+        });
+      }
+
       return res.json({
         success: true,
-        data: { found: false, barcode: barcode.trim() },
-        message: `No product found with barcode "${barcode.trim()}". You can create a new product.`,
+        data: { found: false, enriched: false, barcode: cleanCode },
+        message: `No product found with barcode "${cleanCode}". You can create a new product.`,
       });
     }
 

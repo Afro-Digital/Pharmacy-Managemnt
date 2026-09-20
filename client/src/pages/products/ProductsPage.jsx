@@ -2961,6 +2961,13 @@ export const ProductsPage = () => {
                                       product: res.data.data.product,
                                       message: res.data.message,
                                     });
+                                  } else if (res.data.data.enriched && res.data.data.product) {
+                                    setScanResult({
+                                      type: 'enriched_barcode',
+                                      barcode: decodedText,
+                                      product: res.data.data.product,
+                                      message: res.data.message,
+                                    });
                                   } else {
                                     setScanResult({
                                       type: 'new_barcode',
@@ -3065,6 +3072,98 @@ export const ProductsPage = () => {
                         </div>
                       )}
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Auto-identified product directly from barcode */}
+              {scanResult.type === 'enriched_barcode' && scanResult.product && (
+                <div className="space-y-3">
+                  <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-violet-50 border border-emerald-200 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Sparkles className="w-5 h-5 text-emerald-600" />
+                      <p className="text-sm font-bold text-emerald-900">✨ Product Identified from Barcode!</p>
+                      <Badge className="ml-auto text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        {scanResult.product.source || 'AI Drug Registry'}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-emerald-700 leading-relaxed">{scanResult.message}</p>
+                  </div>
+
+                  {/* Field details preview */}
+                  <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 text-xs">
+                    <div className="p-2.5 flex justify-between">
+                      <span className="text-slate-500">Medicine Name:</span>
+                      <span className="font-bold text-slate-900 text-right">{scanResult.product.name}</span>
+                    </div>
+                    {scanResult.product.generic_name && (
+                      <div className="p-2.5 flex justify-between">
+                        <span className="text-slate-500">Generic (INN):</span>
+                        <span className="font-medium text-slate-800">{scanResult.product.generic_name}</span>
+                      </div>
+                    )}
+                    <div className="p-2.5 flex justify-between">
+                      <span className="text-slate-500">Dosage Form & Strength:</span>
+                      <span className="font-semibold text-slate-900">
+                        {scanResult.product.dosage_form} {scanResult.product.strength ? `• ${scanResult.product.strength}` : ''}
+                      </span>
+                    </div>
+                    {scanResult.product.brand && (
+                      <div className="p-2.5 flex justify-between">
+                        <span className="text-slate-500">Brand / Maker:</span>
+                        <span className="text-slate-800">{scanResult.product.brand}</span>
+                      </div>
+                    )}
+                    <div className="p-2.5 flex justify-between">
+                      <span className="text-slate-500">Packaging Unit:</span>
+                      <span className="capitalize text-slate-800">{scanResult.product.unit || 'strip'}</span>
+                    </div>
+                    <div className="p-2.5 flex justify-between">
+                      <span className="text-slate-500">Barcode:</span>
+                      <span className="font-mono text-slate-800">{scanResult.barcode}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 shadow-md"
+                      onClick={() => {
+                        const p = scanResult.product;
+                        setFormData({
+                          ...initialFormState,
+                          name: p.name || '',
+                          name_am: p.name_am || '',
+                          product_type: p.product_type || 'MEDICINE',
+                          generic_name: p.generic_name || '',
+                          dosage_form: p.dosage_form || 'Tablet',
+                          strength: p.strength || '',
+                          brand: p.brand || '',
+                          manufacturer: p.manufacturer || '',
+                          unit: p.unit || 'strip',
+                          barcode: scanResult.barcode || '',
+                          sku: scanResult.barcode || '',
+                          category_id: p.category_id || '',
+                          requires_prescription: p.requires_prescription === true,
+                        });
+                        setScanModalOpen(false);
+                        setEditingProduct(null);
+                        setErrorMessage(null);
+                        setProductModalOpen(true);
+                      }}
+                    >
+                      <Check className="w-4 h-4 mr-1.5" />
+                      Use This Data — Open Product Form
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="text-xs font-semibold py-2.5"
+                      onClick={() => {
+                        setScanMode('barcode');
+                        setScanResult(null);
+                      }}
+                    >
+                      Scan Next
+                    </Button>
                   </div>
                 </div>
               )}
