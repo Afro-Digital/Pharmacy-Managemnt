@@ -68,8 +68,129 @@ export const ProductsPage = () => {
   const [deleteAllError, setDeleteAllError] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, Excel serials, MM/YYYY, textual dates
+  const normalizeExpiryDateString = (rawInput) => {
+    if (!rawInput && rawInput !== 0) return null;
+    const str = String(rawInput).trim();
+    if (!str) return null;
+
+    // 1. Excel serial number (numeric integer 30000 - 70000)
+    if (/^\d{5}$/.test(str)) {
+      const num = parseInt(str, 10);
+      if (num >= 30000 && num <= 70000) {
+        const d = new Date(Math.round((num - 25569) * 86400 * 1000));
+        if (!isNaN(d.getTime())) {
+          return d.toISOString().split('T')[0];
+        }
+      }
+    }
+
+    // 2. YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+    const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (ymdMatch) {
+      const y = parseInt(ymdMatch[1], 10);
+      const m = parseInt(ymdMatch[2], 10);
+      const d = parseInt(ymdMatch[3], 10);
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+    }
+
+    // 3. DD/MM/YYYY or MM/DD/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dmyMatch) {
+      const p1 = parseInt(dmyMatch[1], 10);
+      const p2 = parseInt(dmyMatch[2], 10);
+      const y = parseInt(dmyMatch[3], 10);
+
+      let day = p1;
+      let month = p2;
+      if (p1 > 12 && p2 <= 12) {
+        day = p1;
+        month = p2;
+      } else if (p2 > 12 && p1 <= 12) {
+        month = p1;
+        day = p2;
+      } else if (p1 <= 12 && p2 <= 12) {
+        // Default to DD/MM/YYYY (standard in Ethiopia & international pharma)
+        day = p1;
+        month = p2;
+      }
+
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+
+    // 4. 2-digit year: DD/MM/YY or MM/DD/YY (e.g. 31/08/27)
+    const dmy2Match = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2})$/);
+    if (dmy2Match) {
+      const p1 = parseInt(dmy2Match[1], 10);
+      const p2 = parseInt(dmy2Match[2], 10);
+      const y = 2000 + parseInt(dmy2Match[3], 10);
+
+      let day = p1;
+      let month = p2;
+      if (p1 > 12 && p2 <= 12) {
+        day = p1;
+        month = p2;
+      } else if (p2 > 12 && p1 <= 12) {
+        month = p1;
+        day = p2;
+      }
+
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+
+    // 5. Month & Year only: MM/YYYY, MM-YYYY, YYYY-MM, MM/YY (pharma blister packs)
+    const myMatch = str.match(/^(\d{1,2})[-/.](\d{4})$/);
+    if (myMatch) {
+      const m = parseInt(myMatch[1], 10);
+      const y = parseInt(myMatch[2], 10);
+      if (m >= 1 && m <= 12) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+    const ymMatch = str.match(/^(\d{4})[-/.](\d{1,2})$/);
+    if (ymMatch) {
+      const y = parseInt(ymMatch[1], 10);
+      const m = parseInt(ymMatch[2], 10);
+      if (m >= 1 && m <= 12) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+    const my2Match = str.match(/^(\d{1,2})[-/.](\d{2})$/);
+    if (my2Match) {
+      const m = parseInt(my2Match[1], 10);
+      const y = 2000 + parseInt(my2Match[2], 10);
+      if (m >= 1 && m <= 12) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+
+    // 6. Textual dates (e.g. 31-Aug-2027, August 31 2027) or native JS Date fallback
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      if (y >= 1990 && y <= 2100) {
+        const m = String(parsed.getMonth() + 1).padStart(2, '0');
+        const d = String(parsed.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+    }
+
+    return null;
+  };
+
   const formatExpiryForInput = (dateStr) => {
     if (!dateStr) return '';
+    const normalized = normalizeExpiryDateString(dateStr);
+    if (normalized) return normalized;
     try {
       return new Date(dateStr).toISOString().split('T')[0];
     } catch {
@@ -296,7 +417,8 @@ export const ProductsPage = () => {
         const price = parseFloat(r.Unit_Price_ETB !== undefined ? r.Unit_Price_ETB : (r.unit_price !== undefined ? r.unit_price : r['Unit Price']));
         const type = (r.Product_Type || r.product_type || '').toUpperCase().trim();
         const batch_number = (r.Batch_Number || r.batch_number || r['Batch Number'] || '').trim();
-        const expiry_date = (r.Expiry_Date || r.expiry_date || r['Expiry Date'] || '').trim();
+        const rawExpiry = (r.Expiry_Date || r.expiry_date || r['Expiry Date'] || '').toString().trim();
+        const normalizedExpiry = normalizeExpiryDateString(rawExpiry);
         const quantityStr = (r.Quantity !== undefined ? r.Quantity : (r.quantity !== undefined ? r.quantity : (r.initial_quantity !== undefined ? r.initial_quantity : r['Qty'] || ''))).toString().trim();
         let unit = (r.Unit || r.unit || r['Unit(bottle, stp, sachets, ampule)'] || r['Packaging Unit'] || '').trim();
         const dosage_form = (r.Dosage_Form || r.dosage_form || r['Dosage Form'] || '').trim();
@@ -336,11 +458,10 @@ export const ProductsPage = () => {
         if (!type || (type !== 'MEDICINE' && type !== 'COSMETIC')) rowErrors.push('Product Type must be MEDICINE or COSMETIC');
         if (isNaN(price) || price < 0 || (r.Unit_Price_ETB === '' && r.unit_price === '')) rowErrors.push('Missing / Invalid Unit Price (ETB)');
         if (rxRaw === undefined || rxRaw === null || rxRaw === '') rowErrors.push('Missing Requires Prescription (true/false)');
-        if (!expiry_date) {
+        if (!rawExpiry) {
           rowErrors.push('Missing Expiry Date');
-        } else {
-          const parsedD = new Date(expiry_date);
-          if (isNaN(parsedD.getTime())) rowErrors.push('Invalid Expiry Date (use YYYY-MM-DD)');
+        } else if (!normalizedExpiry) {
+          rowErrors.push('Invalid Expiry Date (supported: YYYY-MM-DD, DD/MM/YYYY, MM/YYYY, Excel serial)');
         }
         if (!batch_number) rowErrors.push('Missing Batch Number');
         if (!quantityStr || isNaN(parseInt(quantityStr)) || parseInt(quantityStr) < 0) rowErrors.push('Missing / Invalid Quantity');
@@ -371,7 +492,7 @@ export const ProductsPage = () => {
           name,
           unit_price: isNaN(price) ? 0 : price,
           product_type: type || 'MEDICINE',
-          expiry_date,
+          expiry_date: normalizedExpiry || rawExpiry,
           batch_number,
           quantity: quantityStr ? parseInt(quantityStr) : 0,
           unit,

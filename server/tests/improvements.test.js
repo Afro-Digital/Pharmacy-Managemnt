@@ -506,6 +506,79 @@ describe('Improvements: WebQR Rx Upload, Batch Auto-Selection & Bulk Import', ()
       expect(adjustRes.body.success).toBe(true);
       expect(adjustRes.body.data.expiry_date).toContain('2029-05-15');
     });
+
+    it('Smartly normalizes various date formats (DD/MM/YYYY, MM/YYYY, Excel serials) during bulk upload', async () => {
+      const res = await request(app)
+        .post('/api/v1/products/bulk-upload')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          products: [
+            {
+              Name: 'Date Test Paracetamol',
+              Product_Type: 'MEDICINE',
+              Unit_Price_ETB: 25.00,
+              Requires_Prescription: false,
+              Expiry_Date: '31/08/2027', // DD/MM/YYYY format
+              Batch_Number: 'DT-PARA-01',
+              Quantity: 50,
+              Unit: 'Strip',
+              Dosage_Form: 'Tablet',
+              Strength: '500mg',
+            },
+            {
+              Name: 'Date Test Amoxicillin',
+              Product_Type: 'MEDICINE',
+              Unit_Price_ETB: 55.00,
+              Requires_Prescription: true,
+              Expiry_Date: '08/2027', // MM/YYYY pharma format -> end of August
+              Batch_Number: 'DT-AMOX-01',
+              Quantity: 20,
+              Unit: 'Bottle',
+              Dosage_Form: 'Suspension',
+              Strength: '250mg/5ml',
+            },
+            {
+              Name: 'Date Test Ibuprofen',
+              Product_Type: 'MEDICINE',
+              Unit_Price_ETB: 35.00,
+              Requires_Prescription: false,
+              Expiry_Date: '46630', // Excel serial number
+              Batch_Number: 'DT-IBU-01',
+              Quantity: 30,
+              Unit: 'Strip',
+              Dosage_Form: 'Capsule',
+              Strength: '400mg',
+            },
+          ],
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.successCount).toBe(3);
+      expect(res.body.data.failedCount).toBe(0);
+
+      // Verify the products were stored with correctly normalized dates
+      const para = await prisma.product.findFirst({
+        where: { name: 'Date Test Paracetamol' },
+        include: { inventory: true },
+      });
+      expect(para).toBeDefined();
+      expect(new Date(para.inventory[0].expiry_date).toISOString()).toContain('2027-08-31');
+
+      const amox = await prisma.product.findFirst({
+        where: { name: 'Date Test Amoxicillin' },
+        include: { inventory: true },
+      });
+      expect(amox).toBeDefined();
+      expect(new Date(amox.inventory[0].expiry_date).toISOString()).toContain('2027-08-31');
+
+      const ibu = await prisma.product.findFirst({
+        where: { name: 'Date Test Ibuprofen' },
+        include: { inventory: true },
+      });
+      expect(ibu).toBeDefined();
+      expect(new Date(ibu.inventory[0].expiry_date).toISOString()).toContain('2027-08-31');
+    });
   });
 
   describe('5. System Notifications API', () => {
