@@ -13,7 +13,7 @@ export const Select = forwardRef(({
   children,
   ...props
 }, ref) => {
-  const selectId = id || (label ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
+  const selectId = id || (typeof label === 'string' ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
 
   return (
     <div className="w-full">

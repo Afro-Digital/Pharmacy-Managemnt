@@ -10,7 +10,7 @@ export const Input = forwardRef(({
   pill = false,
   ...props
 }, ref) => {
-  const inputId = id || (label ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
+  const inputId = id || (typeof label === 'string' ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
 
   return (
     <div className="w-full">

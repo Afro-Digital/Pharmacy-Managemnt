@@ -938,11 +938,7 @@ export const ProductsPage = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Select
-              label={
-                <span>
-                  {t('products.type')} <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label={t('products.type')}
               required
               value={formData.product_type}
               onChange={(e) => setFormData({ ...formData, product_type: e.target.value })}
@@ -966,11 +962,7 @@ export const ProductsPage = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
-              label={
-                <span>
-                  {t('products.name_en')} <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label={t('products.name_en')}
               required
               placeholder="e.g. Amoxicillin 500mg"
               value={formData.name}
@@ -986,11 +978,7 @@ export const ProductsPage = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Input
-              label={
-                <span>
-                  {t('products.dosage_form')} <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label={t('products.dosage_form')}
               required
               placeholder="e.g. Tablet, Capsule, Syrup, Cream"
               value={formData.dosage_form}
@@ -998,11 +986,7 @@ export const ProductsPage = () => {
               helper="Capsule, Tablet, Syrup, Injection, Cream, etc."
             />
             <Input
-              label={
-                <span>
-                  {t('products.strength')} <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label={t('products.strength')}
               required
               placeholder="e.g. 500mg, 100ml, 50g"
               value={formData.strength}
@@ -1010,11 +994,7 @@ export const ProductsPage = () => {
               helper="Concentration or package weight"
             />
             <Select
-              label={
-                <span>
-                  Packaging Unit <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label="Packaging Unit"
               required
               value={formData.unit}
               onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
@@ -1035,11 +1015,7 @@ export const ProductsPage = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Input
-              label={
-                <span>
-                  {t('products.unit_price')} (ETB) <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label={`${t('products.unit_price')} (ETB)`}
               type="number"
               step="0.01"
               required
@@ -1049,11 +1025,7 @@ export const ProductsPage = () => {
               onChange={(e) => setFormData({ ...formData, unit_price: e.target.value })}
             />
             <Select
-              label={
-                <span>
-                  Requires Prescription <span className="text-rose-500 font-bold">*</span>
-                </span>
-              }
+              label="Requires Prescription"
               required
               value={formData.requires_prescription ? 'true' : 'false'}
               onChange={(e) => setFormData({ ...formData, requires_prescription: e.target.value === 'true' })}
@@ -1181,11 +1153,7 @@ export const ProductsPage = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input
-                label={
-                  <span>
-                    Expiration Date <span className="text-rose-500 font-bold">*</span>
-                  </span>
-                }
+                label="Expiration Date"
                 type="date"
                 required
                 value={formData.expiry_date}
@@ -1193,11 +1161,7 @@ export const ProductsPage = () => {
                 helper="Mandatory expiration date"
               />
               <Input
-                label={
-                  <span>
-                    Batch / Lot Number <span className="text-rose-500 font-bold">*</span>
-                  </span>
-                }
+                label="Batch / Lot Number"
                 required
                 placeholder="e.g. BATCH-2026-01"
                 value={formData.batch_number}
@@ -1209,11 +1173,7 @@ export const ProductsPage = () => {
             {!editingProduct && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <Input
-                  label={
-                    <span>
-                      Initial Stock Quantity <span className="text-rose-500 font-bold">*</span>
-                    </span>
-                  }
+                  label="Initial Stock Quantity"
                   type="number"
                   min="0"
                   required
