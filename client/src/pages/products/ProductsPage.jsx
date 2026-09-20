@@ -126,6 +126,20 @@ export const ProductsPage = () => {
       }
     } catch (err) {
       console.error('Failed to create phone scan session:', err);
+      if (err?.response?.status === 404) {
+        setScanError(
+          'Backend is currently building & deploying the new Vision routes on Render (takes ~3-5 mins). If auto-deploy is not enabled, trigger "Manual Deploy" in the Render Dashboard.'
+        );
+      } else if (err?.response?.status === 503) {
+        setScanError(
+          'GEMINI_API_KEY is not configured on Render. Please add GEMINI_API_KEY to your Render Dashboard environment variables.'
+        );
+      } else {
+        setScanError(
+          err?.response?.data?.error?.message ||
+          'Could not start phone scan session. Please verify backend connection.'
+        );
+      }
     } finally {
       setPhoneSessionLoading(false);
     }
@@ -2093,8 +2107,27 @@ export const ProductsPage = () => {
                       className="rounded-lg"
                     />
                   ) : (
-                    <div className="w-[190px] h-[190px] flex items-center justify-center bg-slate-100 rounded-lg">
-                      <Loader2 className="w-8 h-8 text-violet-600 animate-spin" />
+                    <div className="w-[190px] h-[190px] flex flex-col items-center justify-center bg-slate-50 rounded-lg p-3 text-center">
+                      {phoneSessionLoading ? (
+                        <>
+                          <Loader2 className="w-8 h-8 text-violet-600 animate-spin mb-2" />
+                          <span className="text-xs text-slate-500 font-medium">Connecting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-8 h-8 text-amber-500 mb-2" />
+                          <span className="text-[11px] text-slate-600 mb-2">Backend deploying...</span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="text-xs bg-violet-600 hover:bg-violet-700 text-white font-bold px-3 py-1"
+                            onClick={initPhoneSession}
+                          >
+                            <RefreshCw className="w-3 h-3 mr-1" />
+                            Retry
+                          </Button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
