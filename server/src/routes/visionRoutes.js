@@ -11,6 +11,7 @@ const {
   connectScanSession,
   submitStage1Barcode,
   submitStage2Expiry,
+  updateScanSessionFields,
 } = require('../controllers/visionController');
 
 const router = express.Router();
@@ -82,6 +83,12 @@ router.post(
   submitStage2Expiry
 );
 
+// PATCH /api/v1/vision/scan-session/:sessionId/fields — Phone updates fields manually (Stage 3)
+router.patch(
+  '/scan-session/:sessionId/fields',
+  updateScanSessionFields
+);
+
 // POST /api/v1/vision/scan-session/:sessionId — Legacy single-photo upload
 router.post(
   '/scan-session/:sessionId',
@@ -90,3 +97,4 @@ router.post(
 );
 
 module.exports = router;
+

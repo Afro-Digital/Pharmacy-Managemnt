@@ -16,9 +16,10 @@ import {
   Layers,
   ChevronRight,
   Laptop,
-  Check,
   Clock,
   Loader2,
+  Edit3,
+  Save,
 } from 'lucide-react';
 import { API_BASE } from '../../services/api';
 
@@ -239,7 +240,50 @@ export const MobileMedicineScanPage = () => {
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  // Handle Stage 1 file selection (Barcode)
+  // Stage 3 Editable State (for manual adjustment when user is not satisfied with current info)
+  const [stage3EditMode, setStage3EditMode] = useState(false);
+  const [stage3Form, setStage3Form] = useState({
+    name: '',
+    dosage_form: '',
+    strength: '',
+    expiry_date: '',
+    batch_number: '',
+  });
+  const [stage3Saving, setStage3Saving] = useState(false);
+
+  useEffect(() => {
+    if (sessionData?.productData && !stage3EditMode) {
+      setStage3Form({
+        name: sessionData.productData.name || '',
+        dosage_form: sessionData.productData.dosage_form || '',
+        strength: sessionData.productData.strength || '',
+        expiry_date: normalizeExpiryDateString(sessionData.productData.expiry_date) || sessionData.productData.expiry_date || '',
+        batch_number: sessionData.productData.batch_number || '',
+      });
+    }
+  }, [sessionData?.productData, stage3EditMode]);
+
+  const handleStage3Save = async () => {
+    setStage3Saving(true);
+    setErrorMessage(null);
+    try {
+      const res = await axios.patch(`${API_BASE}/vision/scan-session/${sessionId}/fields`, stage3Form);
+      if (res.data?.success && res.data?.data?.productData) {
+        setSessionData((prev) => ({
+          ...prev,
+          productData: { ...(prev?.productData || {}), ...res.data.data.productData },
+        }));
+        showToast('✓ Information updated and synced to desktop!');
+        setStage3EditMode(false);
+      }
+    } catch (err) {
+      setErrorMessage('Failed to save manual changes. Please try again.');
+    } finally {
+      setStage3Saving(false);
+    }
+  };
+
+  // Handle Stage 1 file selection (Barcode / Packaging)
   const handleStage1FileChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -248,10 +292,10 @@ export const MobileMedicineScanPage = () => {
     setErrorMessage(null);
   };
 
-  // Submit Stage 1 Barcode asynchronously
+  // Submit Stage 1 Packaging photo & identify medicine
   const handleStage1Submit = async () => {
     if (!stage1File && !stage1ManualBarcode.trim()) {
-      setErrorMessage('Please snap a photo of the barcode or type the barcode numbers.');
+      setErrorMessage('Please snap a photo of the medicine box or type the barcode numbers.');
       return;
     }
 
@@ -267,16 +311,21 @@ export const MobileMedicineScanPage = () => {
         formData.append('barcode', stage1ManualBarcode.trim());
       }
 
-      await axios.post(`${API_BASE}/vision/scan-session/${sessionId}/stage1-barcode`, formData, {
+      const res = await axios.post(`${API_BASE}/vision/scan-session/${sessionId}/stage1-barcode`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
       setStage1Submitted(true);
-      showToast('⚡ Google Lens analyzing packaging! Now snap expiry & batch.');
-      // ASYNCHRONOUS NON-BLOCKING: Transition to Stage 2 immediately!
-      setCurrentStage(2);
+      if (res.data?.data?.productData) {
+        setSessionData((prev) => ({
+          ...prev,
+          productData: { ...(prev?.productData || {}), ...res.data.data.productData },
+          stage1: { ...(prev?.stage1 || {}), status: 'COMPLETED' },
+        }));
+      }
+      showToast('✨ Product name, dosage form & strength extracted!');
     } catch (err) {
-      const msg = err.response?.data?.error?.message || 'Failed to submit barcode. Please try again.';
+      const msg = err.response?.data?.error?.message || 'Failed to submit photo. Please try again.';
       setErrorMessage(msg);
     } finally {
       setStage1Uploading(false);
@@ -592,38 +641,130 @@ export const MobileMedicineScanPage = () => {
                   <span>{errorMessage}</span>
                 </div>
               )}
+              {/* Round 1 AI Extraction Results Card */}
+              {stage1Submitted && (productData.name || sessionData?.productData?.name) && (
+                <div className="mt-3 p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl text-slate-900 shadow-sm space-y-2.5">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-emerald-200">
+                    <div className="flex items-center gap-1.5 font-extrabold text-xs text-emerald-800">
+                      <Sparkles className="w-4 h-4 text-emerald-600" />
+                      <span>Round 1 Photo Details Extracted!</span>
+                    </div>
+                    <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-2 py-0.5 rounded-full">
+                      Auto-Filled
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                      Product Name *
+                    </span>
+                    <p className="text-sm font-black text-slate-900 leading-snug">
+                      {productData.name || sessionData?.productData?.name}
+                    </p>
+                    {(productData.generic_name || sessionData?.productData?.generic_name) && (
+                      <p className="text-[11px] text-slate-600">
+                        INN: {productData.generic_name || sessionData?.productData?.generic_name}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Dosage Form *</span>
+                      <span className="font-bold text-emerald-900">
+                        {productData.dosage_form || sessionData?.productData?.dosage_form || '—'}
+                      </span>
+                    </div>
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Strength *</span>
+                      <span className="font-bold text-emerald-900">
+                        {productData.strength || sessionData?.productData?.strength || '—'}
+                      </span>
+                    </div>
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Expiry Date</span>
+                      <span className="font-mono font-bold text-emerald-900">
+                        {normalizeExpiryDateString(productData.expiry_date || sessionData?.productData?.expiry_date) ||
+                          (productData.expiry_date || sessionData?.productData?.expiry_date ? 'Detected' : <span className="text-slate-400 font-normal italic">Optional (Stage 2)</span>)}
+                      </span>
+                    </div>
+                    <div className="bg-white/80 rounded-xl p-2 border border-emerald-200">
+                      <span className="text-[10px] font-bold text-slate-500 block">Unit</span>
+                      <span className="font-bold text-slate-800 capitalize">
+                        {productData.unit || sessionData?.productData?.unit || 'Strip'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* User choices: Satisfied vs Stage 2 vs Stage 3 */}
+                  <div className="pt-2 space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentStage(3)}
+                      className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Satisfied with Info? Finish & Sync to Desktop →</span>
+                    </button>
+
+                    {!(productData.expiry_date || sessionData?.productData?.expiry_date) && (
+                      <button
+                        type="button"
+                        onClick={() => setCurrentStage(2)}
+                        className="w-full py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Stage 2: Snap Expiry & Batch Stamp →</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStage3EditMode(true);
+                        setCurrentStage(3);
+                      }}
+                      className="w-full py-1 text-center text-[11px] font-semibold text-slate-500 hover:text-slate-800"
+                    >
+                      Not satisfied with info? Go to Stage 3 for manual editing →
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Bottom Button for Stage 1 */}
-            <div className="pt-3">
-              <button
-                type="button"
-                disabled={stage1Uploading || (!stage1File && !stage1ManualBarcode.trim())}
-                onClick={handleStage1Submit}
-                className="w-full py-3.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-violet-600/30 transition-all disabled:opacity-50"
-              >
-                {stage1Uploading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Analyzing Entire Product with AI...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 text-violet-200" />
-                    <span>Analyze Product Image & Continue</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
+            {(!stage1Submitted || !productData.name) && (
+              <div className="pt-3">
+                <button
+                  type="button"
+                  disabled={stage1Uploading || (!stage1File && !stage1ManualBarcode.trim())}
+                  onClick={handleStage1Submit}
+                  className="w-full py-3.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-violet-600/30 transition-all disabled:opacity-50"
+                >
+                  {stage1Uploading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Analyzing Entire Product with AI...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-violet-200" />
+                      <span>Analyze Product Image & Auto-Fill</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setCurrentStage(2)}
-                className="w-full text-center text-xs text-slate-500 hover:text-violet-600 font-medium mt-2 py-1"
-              >
-                Skip to Stage 2 (Close-up Expiry Stamp) →
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentStage(2)}
+                  className="w-full text-center text-xs text-slate-500 hover:text-violet-600 font-medium mt-2 py-1"
+                >
+                  Skip to Stage 2 (Close-up Expiry Stamp) →
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -815,19 +956,19 @@ export const MobileMedicineScanPage = () => {
           </div>
         )}
 
-        {/* ─── STAGE 3: LIVE DESKTOP SYNC & COMPLETION ─── */}
+        {/* ─── STAGE 3: MANUAL COMPLETION & REVIEW (IF USER IS NOT SATISFIED) ─── */}
         {currentStage === 3 && (
           <div className="h-full flex flex-col justify-between py-1 space-y-4">
             <div className="space-y-3">
               <div className="text-center space-y-1">
-                <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner mb-1">
-                  <CheckCircle2 className="w-8 h-8" />
+                <div className="w-14 h-14 bg-violet-100 text-violet-600 rounded-full flex items-center justify-center mx-auto shadow-inner mb-1">
+                  <Laptop className="w-7 h-7" />
                 </div>
                 <h2 className="text-lg font-extrabold text-slate-900">
-                  Transferred to Desktop!
+                  Stage 3: Review & Manual Adjustment
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Data from your photos is streaming straight to your desktop product form.
+                  Use this stage if you want to edit any information before saving, or complete on desktop.
                 </p>
               </div>
 
@@ -876,8 +1017,8 @@ export const MobileMedicineScanPage = () => {
                       : stage2.status === 'PROCESSING'
                       ? 'AI Extracting...'
                       : stage2.status === 'QUEUED'
-                      ? 'Queued behind Stage 1'
-                      : 'Pending'}
+                      ? 'Queued'
+                      : 'Verified'}
                   </span>
                 </div>
 
@@ -887,50 +1028,162 @@ export const MobileMedicineScanPage = () => {
                     Stage 3: Manual Completion
                   </span>
                   <span className="font-semibold text-[11px] text-violet-700 bg-violet-100 px-2 py-0.5 rounded">
-                    Open on Desktop
+                    Active
                   </span>
                 </div>
               </div>
 
-              {/* Detected fields summary card */}
-              <div className="bg-slate-900 text-white rounded-2xl p-3.5 space-y-2 text-xs">
-                <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-1.5 text-[11px]">
-                  <span>Live Product Preview</span>
-                  <span className="font-mono text-[10px] text-violet-300">Auto-filled</span>
-                </div>
-
-                <div>
-                  <p className="text-sm font-bold text-white">
-                    {productData.name || 'Awaiting product name...'}
-                  </p>
-                  {productData.generic_name && (
-                    <p className="text-[11px] text-slate-300">{productData.generic_name}</p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
-                  <div>
-                    <span className="text-slate-400 block text-[10px]">Strength:</span>
-                    <span className="font-semibold text-slate-200">{productData.strength || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px]">Dosage Form:</span>
-                    <span className="font-semibold text-slate-200">{productData.dosage_form || '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px]">Batch Number:</span>
-                    <span className="font-mono font-bold text-indigo-300">
-                      {productData.batch_number || '—'}
+              {/* Stage 3 Manual Edit Form or Live Preview */}
+              {stage3EditMode ? (
+                <div className="bg-slate-50 border-2 border-violet-300 rounded-2xl p-3.5 space-y-3 text-xs">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                    <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <Edit3 className="w-4 h-4 text-violet-600" />
+                      Edit Medicine Details
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => setStage3EditMode(false)}
+                      className="text-[11px] text-slate-500 hover:text-slate-800 font-semibold"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px]">Expiry Date:</span>
-                    <span className="font-mono font-bold text-emerald-400">
-                      {normalizeExpiryDateString(productData.expiry_date) || productData.expiry_date || '—'}
-                    </span>
+
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                        Product Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={stage3Form.name}
+                        onChange={(e) => setStage3Form({ ...stage3Form, name: e.target.value })}
+                        className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                        placeholder="e.g. Amoxicillin 500mg"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                          Dosage Form *
+                        </label>
+                        <input
+                          type="text"
+                          value={stage3Form.dosage_form}
+                          onChange={(e) => setStage3Form({ ...stage3Form, dosage_form: e.target.value })}
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          placeholder="e.g. Capsule, Tablet"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                          Strength *
+                        </label>
+                        <input
+                          type="text"
+                          value={stage3Form.strength}
+                          onChange={(e) => setStage3Form({ ...stage3Form, strength: e.target.value })}
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          placeholder="e.g. 500mg, 100ml"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                          Expiry Date (yyyy-MM-dd)
+                        </label>
+                        <input
+                          type="date"
+                          value={stage3Form.expiry_date}
+                          onChange={(e) => setStage3Form({ ...stage3Form, expiry_date: e.target.value })}
+                          className="w-full text-xs font-semibold px-2 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 block mb-0.5">
+                          Batch / Lot No.
+                        </label>
+                        <input
+                          type="text"
+                          value={stage3Form.batch_number}
+                          onChange={(e) => setStage3Form({ ...stage3Form, batch_number: e.target.value })}
+                          className="w-full text-xs font-semibold px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+                          placeholder="e.g. B.N. 4920"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={stage3Saving}
+                      onClick={handleStage3Save}
+                      className="w-full py-2.5 px-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                    >
+                      {stage3Saving ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Saving & Syncing to Desktop...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Save Changes & Sync to Desktop</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="bg-slate-900 text-white rounded-2xl p-3.5 space-y-2 text-xs">
+                  <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-1.5 text-[11px]">
+                    <span>Live Product Preview</span>
+                    <button
+                      type="button"
+                      onClick={() => setStage3EditMode(true)}
+                      className="flex items-center gap-1 text-[11px] font-bold text-violet-400 hover:text-violet-200"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      <span>Edit Info</span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-bold text-white">
+                      {productData.name || 'Awaiting product name...'}
+                    </p>
+                    {productData.generic_name && (
+                      <p className="text-[11px] text-slate-300">{productData.generic_name}</p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Strength:</span>
+                      <span className="font-semibold text-slate-200">{productData.strength || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Dosage Form:</span>
+                      <span className="font-semibold text-slate-200">{productData.dosage_form || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Batch Number:</span>
+                      <span className="font-mono font-bold text-indigo-300">
+                        {productData.batch_number || '—'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Expiry Date:</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        {normalizeExpiryDateString(productData.expiry_date) || productData.expiry_date || '—'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Desktop Prompt and Scan Next */}

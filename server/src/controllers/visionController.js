@@ -122,37 +122,100 @@ const normalizeExpiryDateString = (rawInput) => {
   return null;
 };
 
-// The structured prompt sent to Gemini Vision
-const EXTRACTION_PROMPT = `You are a pharmaceutical inventory assistant for an Ethiopian pharmacy management system.
+// --- Smart Medicine Title & Packaging Parser ---
+// Extracts dosage form, strength, and packaging unit from product name or text
+const parseMedicineTitle = (title) => {
+  if (!title) return {};
+  const str = String(title).trim();
+  const result = { name: str };
 
-Analyze this medicine packaging photo carefully and extract as many of the following fields as possible.
+  // Common dosage forms in pharmaceutical naming
+  const forms = [
+    { name: 'Tablet', regex: /\b(?:tablets?|tabs?|tab)\b/i },
+    { name: 'Capsule', regex: /\b(?:capsules?|caps?|cap)\b/i },
+    { name: 'Caplet', regex: /\bcaplets?\b/i },
+    { name: 'Syrup', regex: /\b(?:syrups?|syr)\b/i },
+    { name: 'Suspension', regex: /\b(?:suspensions?|susp)\b/i },
+    { name: 'Injection', regex: /\b(?:injections?|inj)\b/i },
+    { name: 'Cream', regex: /\b(?:creams?|crm)\b/i },
+    { name: 'Ointment', regex: /\b(?:ointments?|oint)\b/i },
+    { name: 'Gel', regex: /\bgels?\b/i },
+    { name: 'Drops', regex: /\b(?:eye\s*drops?|ear\s*drops?|drops?)\b/i },
+    { name: 'Inhaler', regex: /\binhalers?\b/i },
+    { name: 'Spray', regex: /\bsprays?\b/i },
+    { name: 'Solution', regex: /\b(?:solutions?|sol)\b/i },
+    { name: 'Suppository', regex: /\bsuppositor(?:y|ies)\b/i },
+    { name: 'Vial', regex: /\bvials?\b/i },
+    { name: 'Ampule', regex: /\b(?:ampules?|ampoules?)\b/i },
+    { name: 'Lotion', regex: /\blotions?\b/i },
+    { name: 'Powder', regex: /\bpowders?\b/i },
+    { name: 'Elixir', regex: /\belixirs?\b/i },
+  ];
+  for (const f of forms) {
+    if (f.regex.test(str)) {
+      result.dosage_form = f.name;
+      break;
+    }
+  }
+
+  // Strength: 500mg, 250mg/5ml, 100ml, 1%, 50mcg, 1000 IU, 1g, 10mg, etc.
+  const strengthMatch = str.match(/(\d+(?:\.\d+)?\s*(?:mg|g|ml|mcg|iu|%)(?:\/\d+(?:\.\d+)?\s*(?:ml|mg))?)/i);
+  if (strengthMatch) {
+    result.strength = strengthMatch[1].replace(/\s+/g, '');
+  }
+
+  // Packaging unit
+  const units = ['Strip', 'Bottle', 'Box', 'Tube', 'Vial', 'Sachet', 'Ampule', 'Pack', 'Blister'];
+  for (const u of units) {
+    if (new RegExp(`\\b${u}s?\\b`, 'i').test(str)) {
+      result.unit = u.toLowerCase();
+      break;
+    }
+  }
+
+  return result;
+};
+
+// The structured prompt sent to Gemini Vision
+const EXTRACTION_PROMPT = `You are an expert pharmaceutical computer vision assistant for an Ethiopian pharmacy management system.
+
+Analyze this medicine packaging photo carefully and extract the following fields into a structured JSON object.
+
+CRITICAL MANDATORY INSTRUCTIONS:
+1. "name": The commercial brand/trade name of the medicine as printed on the packaging (e.g. "Amoxil", "Augmentin", "Cipro 500", "Paracetamol", "Omeprazole", "Ibuprofen").
+2. "dosage_form": The physical pharmaceutical formulation. MUST BE one of: "Tablet", "Capsule", "Caplet", "Syrup", "Suspension", "Injection", "Cream", "Ointment", "Gel", "Drops", "Inhaler", "Powder", "Suppository", "Vial", "Ampule", "Solution", "Lotion". If not written as explicit text, infer it from the visual packaging (e.g. blister pack = "Tablet" or "Capsule", bottle with syrup liquid = "Syrup", tube = "Cream" or "Ointment").
+3. "strength": The active ingredient strength/concentration with unit (e.g. "500mg", "250mg/5ml", "100ml", "1g", "10mg", "50mcg", "1%", "2%"). Look closely near or under the medicine name.
+4. "expiry_date": The expiration date printed on the packaging (e.g. "07 2027", "07/2027", "EXP 08/2026", "2027-07-31", "07-2027"). Extract it if visible anywhere on the packaging.
+5. "generic_name": The active pharmaceutical ingredient / INN name (e.g. "Amoxicillin", "Paracetamol", "Ciprofloxacin").
+6. "batch_number": The lot or batch number if visible (e.g. "B.N. 4920", "LOT 8812").
+7. "brand": The pharmaceutical company brand name if different from generic name.
+8. "manufacturer": The manufacturing company (e.g. "Cadila", "Julphar", "EPHARM", "GSK", "Pfizer").
+9. "barcode": Any barcode number digits if readable near a barcode.
+10. "unit": Inferred packaging unit: "Strip", "Bottle", "Box", "Tube", "Vial", "Sachet", "Ampule".
 
 Return ONLY a valid JSON object with exactly these keys:
 {
-  "name": "Full product name as printed on the packaging",
-  "name_am": "Amharic name if visible on the packaging, otherwise null",
-  "product_type": "MEDICINE or COSMETIC",
-  "generic_name": "Generic/INN name if visible (e.g. Amoxicillin, Paracetamol), otherwise null",
-  "dosage_form": "Tablet, Capsule, Syrup, Suspension, Injection, Cream, Ointment, Drops, Inhaler, Gel, Powder, or other form visible",
-  "strength": "Strength with unit as printed (e.g. 500mg, 250mg/5ml, 100ml), otherwise null",
-  "brand": "Brand name if visible and different from generic name, otherwise null",
-  "manufacturer": "Manufacturer/company name if visible, otherwise null",
-  "batch_number": "Batch number or Lot number if visible (often prefixed with B.N., Batch No., Lot), otherwise null",
-  "expiry_date": "Expiry date exactly as printed on packaging (e.g. 08/2027, 2027-08-31, EXP 08/27), otherwise null",
-  "barcode": "Barcode number if any digits are readable near a barcode, otherwise null",
-  "requires_prescription": true if you see Rx, ℞, or prescription-only markings; false if OTC or no marking visible,
-  "unit": "Packaging unit: Strip, Bottle, Box, Tube, Vial, Sachet, Ampule — infer from the packaging type",
-  "category": "Pharmaceutical category if determinable (e.g. Antibiotic, Analgesic, Antacid, Vitamin), otherwise null",
-  "description": "Brief description of the medicine based on what you can see, otherwise null",
-  "confidence": 0.0 to 1.0 overall confidence in your extraction
+  "name": "Full product name",
+  "name_am": null,
+  "product_type": "MEDICINE",
+  "generic_name": "Generic/INN name",
+  "dosage_form": "Tablet, Capsule, Syrup, etc.",
+  "strength": "Strength with unit",
+  "brand": "Brand name",
+  "manufacturer": "Manufacturer name",
+  "batch_number": "Batch or Lot number",
+  "expiry_date": "Expiry date as printed",
+  "barcode": "Barcode digits or null",
+  "requires_prescription": false,
+  "unit": "Strip, Bottle, Box, etc.",
+  "category": "Antibiotic, Analgesic, etc.",
+  "description": "Short description",
+  "confidence": 0.95
 }
 
 Important rules:
-- Return ONLY the JSON object, no markdown, no explanation, no code fences.
-- Use null for any field you cannot determine from the image.
-- For expiry_date, transcribe it exactly as printed — the system will normalize it.
-- Be conservative with confidence: use 0.9+ only if the image is very clear.
-- If the image is blurry, dark, or not a medicine package, set confidence to 0.0 and set all fields to null.`;
+- Return ONLY the raw JSON object, no markdown code fences, no explanations.
+- Never leave "dosage_form" or "strength" null if they can be determined from the text or visual package.`;
 
 // In-memory store for phone scan sessions
 const scanSessions = new Map();
@@ -240,6 +303,32 @@ const processMedicineImageBuffer = async (buffer, apiKey) => {
     const normalized = normalizeExpiryDateString(extracted.expiry_date);
     extracted.expiry_date_raw = extracted.expiry_date;
     extracted.expiry_date = normalized || null;
+  }
+
+  // Smart Title & Text Fallback for Dosage Form, Strength, and Unit
+  const parsedFromText = parseMedicineTitle(
+    `${extracted.name || ''} ${extracted.description || ''} ${extracted.generic_name || ''}`
+  );
+  if (!extracted.dosage_form && parsedFromText.dosage_form) {
+    extracted.dosage_form = parsedFromText.dosage_form;
+  }
+  if (!extracted.strength && parsedFromText.strength) {
+    extracted.strength = parsedFromText.strength;
+  }
+  if (!extracted.unit && parsedFromText.unit) {
+    extracted.unit = parsedFromText.unit;
+  }
+
+  // If still missing dosage_form for a MEDICINE, check common clues
+  if (!extracted.dosage_form && extracted.product_type === 'MEDICINE') {
+    const combined = `${extracted.name || ''} ${extracted.description || ''}`.toLowerCase();
+    if (combined.includes('oral') || combined.includes('pill') || combined.includes('tablet') || combined.includes('tab')) {
+      extracted.dosage_form = 'Tablet';
+    } else if (combined.includes('capsule') || combined.includes('cap')) {
+      extracted.dosage_form = 'Capsule';
+    } else if (combined.includes('syrup') || combined.includes('liquid') || combined.includes('suspension')) {
+      extracted.dosage_form = 'Syrup';
+    }
   }
 
   // Post-process: normalize product_type
@@ -505,42 +594,6 @@ const connectScanSession = async (req, res, next) => {
 };
 
 // --- Universal Barcode Drug Identification & Enrichment Service ---
-
-// 1. Smart Medicine Title Parser: extracts dosage form, strength, and unit from raw titles
-const parseMedicineTitle = (title) => {
-  if (!title) return {};
-  const result = { name: String(title).trim() };
-
-  // Common dosage forms in pharmaceutical naming
-  const forms = [
-    'Caplet', 'Capsule', 'Tablet', 'Syrup', 'Suspension', 'Injection',
-    'Cream', 'Ointment', 'Drops', 'Inhaler', 'Gel', 'Spray', 'Solution',
-    'Suppository', 'Vial', 'Ampule', 'Lotion', 'Powder', 'Elixir', 'Eye Drops', 'Ear Drops'
-  ];
-  for (const f of forms) {
-    if (new RegExp(`\\b${f}s?\\b`, 'i').test(title)) {
-      result.dosage_form = f;
-      break;
-    }
-  }
-
-  // Strength (e.g. 500mg, 250mg/5ml, 100ml, 1%, 50mcg, 1000 IU, 1g, 10mg)
-  const strengthMatch = title.match(/(\d+(?:\.\d+)?\s*(?:mg|g|ml|mcg|iu|%)(?:\/\d+\s*(?:ml|mg))?)/i);
-  if (strengthMatch) {
-    result.strength = strengthMatch[1].replace(/\s+/g, '');
-  }
-
-  // Packaging unit
-  const units = ['Strip', 'Bottle', 'Box', 'Tube', 'Vial', 'Sachet', 'Ampule', 'Pack', 'Blister'];
-  for (const u of units) {
-    if (new RegExp(`\\b${u}s?\\b`, 'i').test(title)) {
-      result.unit = u.toLowerCase();
-      break;
-    }
-  }
-
-  return result;
-};
 
 // 2. Query UPCitemdb (Global barcode database with millions of pharmaceuticals & health items)
 const lookupUPCItemDB = async (barcode) => {
@@ -832,174 +885,193 @@ const submitStage1Barcode = async (req, res, next) => {
 
     session.stage1.status = 'PROCESSING';
     session.status = 'PROCESSING';
-    session.message = 'Processing Stage 1: Identifying medicine from barcode & packaging...';
+    session.message = 'Processing Stage 1: Analyzing product image with AI...';
 
     const fileBuffer = req.file ? req.file.buffer : null;
     const barcodeInput = barcode ? String(barcode).trim() : null;
 
-    // Asynchronously process Stage 1 in the session queue
-    queueSessionTask(sessionId, async () => {
-      try {
-        let code = barcodeInput;
+    try {
+      let code = barcodeInput;
 
-        // 1. If an image was submitted, run Gemini Vision packaging extraction
-        if (fileBuffer) {
-          const apiKey = process.env.GEMINI_API_KEY;
-          if (apiKey) {
-            try {
-              const res = await processMedicineImageBuffer(fileBuffer, apiKey);
-              if (res?.data?.extracted) {
-                const ext = res.data.extracted;
-                if (!code && ext.barcode) {
-                  code = ext.barcode;
-                }
-                Object.assign(session.productData, {
-                  name: ext.name || session.productData.name,
-                  name_am: ext.name_am || session.productData.name_am,
-                  product_type: ext.product_type || session.productData.product_type,
-                  generic_name: ext.generic_name || session.productData.generic_name,
-                  dosage_form: ext.dosage_form || session.productData.dosage_form,
-                  strength: ext.strength || session.productData.strength,
-                  brand: ext.brand || session.productData.brand,
-                  manufacturer: ext.manufacturer || session.productData.manufacturer,
-                  unit: ext.unit || session.productData.unit,
-                  batch_number: ext.batch_number || session.productData.batch_number,
-                  expiry_date: ext.expiry_date || session.productData.expiry_date,
-                  requires_prescription:
-                    ext.requires_prescription !== undefined
-                      ? ext.requires_prescription
-                      : session.productData.requires_prescription,
-                  category_id: res.data.matchedCategoryId || session.productData.category_id,
-                });
-                session.fieldSources.name = 'STAGE_1_PACKAGING_SCAN';
-                session.fieldSources.dosage_form = 'STAGE_1_PACKAGING_SCAN';
-                session.fieldSources.strength = 'STAGE_1_PACKAGING_SCAN';
-                if (ext.expiry_date) session.fieldSources.expiry_date = 'STAGE_1_PACKAGING_SCAN';
-                if (ext.batch_number) session.fieldSources.batch_number = 'STAGE_1_PACKAGING_SCAN';
+      // 1. If an image was submitted, run Gemini Vision packaging extraction
+      if (fileBuffer) {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (apiKey) {
+          try {
+            const res = await processMedicineImageBuffer(fileBuffer, apiKey);
+            if (res?.data?.extracted) {
+              const ext = res.data.extracted;
+              if (!code && ext.barcode) {
+                code = ext.barcode;
               }
-            } catch (vErr) {
-              console.warn('Packaging extraction failed:', vErr.message);
+              Object.assign(session.productData, {
+                name: ext.name || session.productData.name,
+                name_am: ext.name_am || session.productData.name_am,
+                product_type: ext.product_type || session.productData.product_type,
+                generic_name: ext.generic_name || session.productData.generic_name,
+                dosage_form: ext.dosage_form || session.productData.dosage_form,
+                strength: ext.strength || session.productData.strength,
+                brand: ext.brand || session.productData.brand,
+                manufacturer: ext.manufacturer || session.productData.manufacturer,
+                unit: ext.unit || session.productData.unit,
+                batch_number: ext.batch_number || session.productData.batch_number,
+                expiry_date: ext.expiry_date || session.productData.expiry_date,
+                requires_prescription:
+                  ext.requires_prescription !== undefined
+                    ? ext.requires_prescription
+                    : session.productData.requires_prescription,
+                category_id: res.data.matchedCategoryId || session.productData.category_id,
+              });
+              session.fieldSources.name = 'STAGE_1_PACKAGING_SCAN';
+              session.fieldSources.dosage_form = 'STAGE_1_PACKAGING_SCAN';
+              session.fieldSources.strength = 'STAGE_1_PACKAGING_SCAN';
+              if (ext.expiry_date) session.fieldSources.expiry_date = 'STAGE_1_PACKAGING_SCAN';
+              if (ext.batch_number) session.fieldSources.batch_number = 'STAGE_1_PACKAGING_SCAN';
             }
+          } catch (vErr) {
+            console.warn('Packaging extraction failed:', vErr.message);
           }
         }
+      }
 
-        // 2. Barcode resolution & Drug Database / AI Enrichment
-        if (code) {
-          session.stage1.barcode = code;
-          session.productData.barcode = code;
-          session.fieldSources.barcode = 'STAGE_1_BARCODE';
+      // 2. Barcode resolution & Drug Database / AI Enrichment
+      if (code) {
+        session.stage1.barcode = code;
+        session.productData.barcode = code;
+        session.fieldSources.barcode = 'STAGE_1_BARCODE';
 
-          // Check local database for existing product match
-          const existing = await prisma.product.findFirst({
-            where: {
-              OR: [{ barcode: code }, { sku: code }],
-            },
-            include: {
-              category: true,
-              inventory: {
-                select: {
-                  id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
-                },
-                orderBy: { expiry_date: 'asc' },
+        // Check local database for existing product match
+        const existing = await prisma.product.findFirst({
+          where: {
+            OR: [{ barcode: code }, { sku: code }],
+          },
+          include: {
+            category: true,
+            inventory: {
+              select: {
+                id: true, location: true, batch_number: true, expiry_date: true, quantity: true,
               },
+              orderBy: { expiry_date: 'asc' },
             },
+          },
+        });
+
+        if (existing) {
+          session.existingProduct = {
+            id: existing.id,
+            name: existing.name,
+            barcode: existing.barcode,
+            sku: existing.sku,
+            totalStock: existing.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
+            batchCount: existing.inventory.length,
+          };
+          session.isNewProduct = false;
+          session.stage1.productFound = true;
+          session.stage1.message = `Found existing product: "${existing.name}".`;
+
+          // Merge existing product info
+          Object.assign(session.productData, {
+            name: existing.name,
+            name_am: existing.name_am || session.productData.name_am,
+            product_type: existing.product_type,
+            generic_name: existing.generic_name || session.productData.generic_name,
+            dosage_form: existing.dosage_form || session.productData.dosage_form,
+            strength: existing.strength || session.productData.strength,
+            brand: existing.brand || session.productData.brand,
+            manufacturer: existing.manufacturer || session.productData.manufacturer,
+            unit_price: existing.unit_price,
+            unit: existing.unit || session.productData.unit || 'strip',
+            category_id: existing.category_id || session.productData.category_id,
+            requires_prescription: existing.requires_prescription,
+          });
+          session.fieldSources.name = 'EXISTING_DB';
+          session.fieldSources.dosage_form = 'EXISTING_DB';
+          session.fieldSources.strength = 'EXISTING_DB';
+          session.fieldSources.unit_price = 'EXISTING_DB';
+        } else {
+          // New product: Auto-identify medicine details from barcode via multi-source engine!
+          const apiKey = process.env.GEMINI_API_KEY;
+          const enriched = await enrichMedicineFromBarcode({
+            barcode: code,
+            imageBuffer: fileBuffer,
+            apiKey,
           });
 
-          if (existing) {
-            session.existingProduct = {
-              id: existing.id,
-              name: existing.name,
-              barcode: existing.barcode,
-              sku: existing.sku,
-              totalStock: existing.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
-              batchCount: existing.inventory.length,
-            };
+          if (enriched && enriched.name) {
+            Object.assign(session.productData, {
+              barcode: code,
+              name: enriched.name,
+              name_am: enriched.name_am || session.productData.name_am,
+              product_type: enriched.product_type || session.productData.product_type,
+              generic_name: enriched.generic_name || session.productData.generic_name,
+              dosage_form: enriched.dosage_form || session.productData.dosage_form,
+              strength: enriched.strength || session.productData.strength,
+              brand: enriched.brand || session.productData.brand,
+              manufacturer: enriched.manufacturer || session.productData.manufacturer,
+              unit: enriched.unit || session.productData.unit || 'strip',
+              category_id: enriched.category_id || session.productData.category_id,
+              requires_prescription: enriched.requires_prescription,
+            });
+            session.fieldSources.name = enriched.source;
+            session.fieldSources.dosage_form = enriched.source;
+            session.fieldSources.strength = enriched.source;
+
+            session.isNewProduct = true;
+            session.stage1.productFound = false;
+            session.stage1.message = `✨ Auto-identified: "${enriched.name}" (${enriched.strength || ''} ${enriched.dosage_form || ''}) from barcode!`;
+          } else {
+            session.isNewProduct = true;
+            session.stage1.productFound = false;
+            session.stage1.message = session.productData.name
+              ? `Detected "${session.productData.name}" (Barcode: ${code})`
+              : `Barcode "${code}" detected (New product).`;
+          }
+        }
+      } else if (session.productData.name) {
+        // Match existing product by name in database if barcode is absent
+        try {
+          const existingByName = await prisma.product.findFirst({
+            where: { name: { equals: session.productData.name, mode: 'insensitive' } },
+            include: { category: true },
+          });
+          if (existingByName) {
+            if (!session.productData.dosage_form) session.productData.dosage_form = existingByName.dosage_form;
+            if (!session.productData.strength) session.productData.strength = existingByName.strength;
+            if (!session.productData.category_id) session.productData.category_id = existingByName.category_id;
+            if (!session.productData.unit_price) session.productData.unit_price = existingByName.unit_price;
+            if (!session.productData.barcode && existingByName.barcode) session.productData.barcode = existingByName.barcode;
             session.isNewProduct = false;
             session.stage1.productFound = true;
-            session.stage1.message = `Found existing product: "${existing.name}".`;
-
-            // Merge existing product info
-            Object.assign(session.productData, {
-              name: existing.name,
-              name_am: existing.name_am || session.productData.name_am,
-              product_type: existing.product_type,
-              generic_name: existing.generic_name || session.productData.generic_name,
-              dosage_form: existing.dosage_form || session.productData.dosage_form,
-              strength: existing.strength || session.productData.strength,
-              brand: existing.brand || session.productData.brand,
-              manufacturer: existing.manufacturer || session.productData.manufacturer,
-              unit_price: existing.unit_price,
-              unit: existing.unit || session.productData.unit || 'strip',
-              category_id: existing.category_id || session.productData.category_id,
-              requires_prescription: existing.requires_prescription,
-            });
-            session.fieldSources.name = 'EXISTING_DB';
-            session.fieldSources.dosage_form = 'EXISTING_DB';
-            session.fieldSources.strength = 'EXISTING_DB';
-            session.fieldSources.unit_price = 'EXISTING_DB';
-          } else {
-            // New product: Auto-identify medicine details from barcode via multi-source engine!
-            const apiKey = process.env.GEMINI_API_KEY;
-            const enriched = await enrichMedicineFromBarcode({
-              barcode: code,
-              imageBuffer: fileBuffer,
-              apiKey,
-            });
-
-            if (enriched && enriched.name) {
-              Object.assign(session.productData, {
-                barcode: code,
-                name: enriched.name,
-                name_am: enriched.name_am || session.productData.name_am,
-                product_type: enriched.product_type || session.productData.product_type,
-                generic_name: enriched.generic_name || session.productData.generic_name,
-                dosage_form: enriched.dosage_form || session.productData.dosage_form,
-                strength: enriched.strength || session.productData.strength,
-                brand: enriched.brand || session.productData.brand,
-                manufacturer: enriched.manufacturer || session.productData.manufacturer,
-                unit: enriched.unit || session.productData.unit || 'strip',
-                category_id: enriched.category_id || session.productData.category_id,
-                requires_prescription: enriched.requires_prescription,
-              });
-              session.fieldSources.name = enriched.source;
-              session.fieldSources.dosage_form = enriched.source;
-              session.fieldSources.strength = enriched.source;
-
-              session.isNewProduct = true;
-              session.stage1.productFound = false;
-              session.stage1.message = `✨ Auto-identified: "${enriched.name}" (${enriched.strength || ''} ${enriched.dosage_form || ''}) from barcode!`;
-            } else {
-              session.isNewProduct = true;
-              session.stage1.productFound = false;
-              session.stage1.message = session.productData.name
-                ? `Detected "${session.productData.name}" (Barcode: ${code})`
-                : `Barcode "${code}" detected (New product).`;
-            }
+            session.stage1.message = `Found existing product in inventory: "${existingByName.name}".`;
           }
-        } else if (session.productData.name) {
-          session.stage1.message = `Detected product "${session.productData.name}" via packaging scan.`;
+        } catch (e) {
+          // Ignore lookup error
         }
-
-        session.stage1.status = 'COMPLETED';
-        if (session.stage2.status !== 'PROCESSING' && session.stage2.status !== 'QUEUED') {
-          session.message = session.productData.name
-            ? `Stage 1 Complete: "${session.productData.name}" detected. Ready for Stage 2: Expiry & Batch.`
-            : 'Stage 1 Complete: Barcode detected. Ready for Stage 2: Expiry & Batch.';
+        if (!session.stage1.message) {
+          session.stage1.message = `Detected product "${session.productData.name}" (${session.productData.dosage_form || ''} ${session.productData.strength || ''}) via packaging scan.`;
         }
-      } catch (err) {
-        console.error('Stage 1 processing error:', err);
-        session.stage1.status = 'FAILED';
-        session.stage1.error = err.message;
       }
-    });
 
-    // Non-blocking response to the phone
+      session.stage1.status = 'COMPLETED';
+      if (session.stage2.status !== 'PROCESSING' && session.stage2.status !== 'QUEUED') {
+        session.message = session.productData.name
+          ? `Stage 1 Complete: "${session.productData.name}" detected (${session.productData.dosage_form || ''} ${session.productData.strength || ''}). Ready for Stage 2: Expiry & Batch.`
+          : 'Stage 1 Complete: Packaging analyzed.';
+      }
+    } catch (err) {
+      console.error('Stage 1 processing error:', err);
+      session.stage1.status = 'FAILED';
+      session.stage1.error = err.message;
+    }
+
     res.json({
       success: true,
-      message: 'Packaging & barcode accepted and processing asynchronously',
+      message: 'Packaging analyzed successfully',
       data: {
         stage1Status: session.stage1.status,
-        barcode: barcodeInput,
+        barcode: session.productData.barcode || barcodeInput,
+        productData: session.productData,
+        fieldSources: session.fieldSources,
       },
     });
   } catch (err) {
@@ -1342,6 +1414,44 @@ const lookupBarcode = async (req, res, next) => {
   }
 };
 
+// PATCH /api/v1/vision/scan-session/:sessionId/fields — Update product fields manually (Stage 3)
+const updateScanSessionFields = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = scanSessions.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Scan session not found or expired' },
+      });
+    }
+
+    const allowed = ['name', 'dosage_form', 'strength', 'expiry_date', 'batch_number', 'unit', 'unit_price', 'barcode', 'generic_name'];
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        if (key === 'expiry_date') {
+          session.productData[key] = normalizeExpiryDateString(req.body[key]) || req.body[key];
+        } else {
+          session.productData[key] = req.body[key];
+        }
+        session.fieldSources[key] = 'STAGE_3_MANUAL';
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Product fields updated successfully',
+      data: {
+        productData: session.productData,
+        fieldSources: session.fieldSources,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   extractProductFromImage,
   lookupBarcode,
@@ -1351,4 +1461,6 @@ module.exports = {
   connectScanSession,
   submitStage1Barcode,
   submitStage2Expiry,
+  updateScanSessionFields,
 };
+

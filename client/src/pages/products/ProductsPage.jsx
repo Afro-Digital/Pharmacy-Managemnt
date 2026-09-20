@@ -2395,7 +2395,7 @@ export const ProductsPage = () => {
 
                   {/* Stage 3 Manual Completion Guidance */}
                   <div className="p-2.5 rounded-xl border border-violet-200 bg-violet-50/50 text-violet-950 text-[11px] leading-relaxed">
-                    <strong>Stage 3: Manual Completion:</strong> Once the phone submits photos, details stream onto the form on the right. Enter the unit price & quantity, review, and save to inventory.
+                    <strong>Stage 3: Review & Manual Adjustment:</strong> The AI extracts Product Name, Dosage Form, Strength, and Expiry Date from the first round photo. If you are not satisfied with any detected field, edit it here directly before saving.
                   </div>
                 </div>
 
