@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../context/AuthContext';
 import api, { API_BASE } from '../../services/api';
@@ -28,6 +28,12 @@ import {
   Check,
   Eye,
   Calendar,
+  Camera,
+  ScanLine,
+  Loader2,
+  Sparkles,
+  ImageIcon,
+  XCircle,
 } from 'lucide-react';
 
 export const ProductsPage = () => {
@@ -67,6 +73,17 @@ export const ProductsPage = () => {
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [deleteAllError, setDeleteAllError] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Smart Scan state
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [scanMode, setScanMode] = useState('barcode'); // 'barcode' | 'photo' | 'result'
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState(null);
+  const [scanResult, setScanResult] = useState(null);
+  const [barcodeScanning, setBarcodeScanning] = useState(false);
+  const scannerRef = useRef(null);
+  const photoInputRef = useRef(null);
+  const barcodeContainerRef = useRef(null);
 
   // Smart Expiry Date Normalizer: supports YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, Excel serials, MM/YYYY, textual dates
   const normalizeExpiryDateString = (rawInput) => {
@@ -984,6 +1001,18 @@ export const ProductsPage = () => {
               <Upload className="w-3.5 h-3.5 mr-1.5" />
               Bulk Import CSV
             </Button>
+            <Button
+              onClick={() => {
+                setScanModalOpen(true);
+                setScanMode('barcode');
+                setScanError(null);
+                setScanResult(null);
+              }}
+              className="text-xs font-bold px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-xs"
+            >
+              <Camera className="w-4 h-4 mr-1.5" />
+              📷 Scan Medicine
+            </Button>
             <Button onClick={openAddModal} className="text-xs font-bold px-4 py-2 shadow-xs">
               <Plus className="w-4 h-4 mr-1.5" />
               {t('products.add_new')}
@@ -1879,6 +1908,396 @@ export const ProductsPage = () => {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* ─── Smart Scan Modal ─── */}
+      <Modal
+        isOpen={scanModalOpen}
+        onClose={() => {
+          setScanModalOpen(false);
+          setScanMode('barcode');
+          setScanError(null);
+          setScanResult(null);
+          // Stop barcode scanner if running
+          if (scannerRef.current) {
+            try { scannerRef.current.stop().catch(() => {}); } catch (e) {}
+            scannerRef.current = null;
+          }
+        }}
+        title={scanMode === 'result' ? '✅ Extraction Result' : '📷 Smart Scan — Medicine Intake'}
+        size="lg"
+      >
+        <div className="space-y-4">
+          {scanError && (
+            <Alert variant="error" onClose={() => setScanError(null)}>
+              {scanError}
+            </Alert>
+          )}
+
+          {/* Mode Tabs */}
+          {scanMode !== 'result' && (
+            <div className="flex gap-2 bg-slate-100 rounded-lg p-1">
+              <button
+                onClick={() => setScanMode('barcode')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-md text-sm font-semibold transition-all ${
+                  scanMode === 'barcode'
+                    ? 'bg-white text-violet-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <ScanLine className="w-4 h-4" />
+                Scan Barcode
+              </button>
+              <button
+                onClick={() => setScanMode('photo')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-md text-sm font-semibold transition-all ${
+                  scanMode === 'photo'
+                    ? 'bg-white text-violet-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <Camera className="w-4 h-4" />
+                Take Photo
+              </button>
+            </div>
+          )}
+
+          {/* Barcode Scanner Mode */}
+          {scanMode === 'barcode' && (
+            <div className="space-y-4">
+              <div
+                ref={barcodeContainerRef}
+                id="barcode-scanner-container"
+                className="relative w-full rounded-xl overflow-hidden bg-slate-900"
+                style={{ minHeight: '280px' }}
+              >
+                {!barcodeScanning && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white z-10">
+                    <ScanLine className="w-16 h-16 mb-4 text-violet-400 animate-pulse" />
+                    <p className="text-sm font-medium text-slate-300">Camera will appear here</p>
+                    <Button
+                      className="mt-4 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold px-6 py-2.5"
+                      onClick={async () => {
+                        setScanError(null);
+                        try {
+                          const { Html5Qrcode } = await import('html5-qrcode');
+                          const scanner = new Html5Qrcode('barcode-scanner-container');
+                          scannerRef.current = scanner;
+                          setBarcodeScanning(true);
+                          await scanner.start(
+                            { facingMode: 'environment' },
+                            { fps: 10, qrbox: { width: 250, height: 150 } },
+                            async (decodedText) => {
+                              // Barcode detected!
+                              try {
+                                await scanner.stop();
+                              } catch (e) {}
+                              scannerRef.current = null;
+                              setBarcodeScanning(false);
+                              // Look up in DB
+                              setScanLoading(true);
+                              try {
+                                const res = await api.post('/vision/lookup-barcode', { barcode: decodedText });
+                                if (res.data.data.found) {
+                                  setScanResult({
+                                    type: 'existing',
+                                    barcode: decodedText,
+                                    product: res.data.data.product,
+                                    message: res.data.message,
+                                  });
+                                } else {
+                                  setScanResult({
+                                    type: 'new_barcode',
+                                    barcode: decodedText,
+                                    message: `Barcode "${decodedText}" not found. Take a photo of the packaging to auto-fill product details.`,
+                                  });
+                                }
+                                setScanMode('result');
+                              } catch (err) {
+                                setScanError(err?.response?.data?.error?.message || 'Barcode lookup failed');
+                              } finally {
+                                setScanLoading(false);
+                              }
+                            },
+                            () => {} // ignore scan errors
+                          );
+                        } catch (err) {
+                          setBarcodeScanning(false);
+                          setScanError('Could not access camera. Please check permissions or try Photo mode.');
+                        }
+                      }}
+                    >
+                      <Camera className="w-4 h-4 mr-2" />
+                      Start Camera
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {barcodeScanning && (
+                <div className="text-center">
+                  <p className="text-sm text-slate-500 flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-violet-600" />
+                    Point camera at the barcode on the medicine packaging...
+                  </p>
+                  <Button
+                    variant="outline"
+                    className="mt-2 text-xs"
+                    onClick={async () => {
+                      if (scannerRef.current) {
+                        try { await scannerRef.current.stop(); } catch (e) {}
+                        scannerRef.current = null;
+                      }
+                      setBarcodeScanning(false);
+                    }}
+                  >
+                    Stop Scanner
+                  </Button>
+                </div>
+              )}
+              <p className="text-xs text-slate-400 text-center">
+                Can't scan the barcode? Switch to <button onClick={() => setScanMode('photo')} className="text-violet-600 font-semibold underline">Photo mode</button> instead.
+              </p>
+            </div>
+          )}
+
+          {/* Photo Capture Mode */}
+          {scanMode === 'photo' && (
+            <div className="space-y-4">
+              <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center bg-slate-50/50 hover:border-violet-300 hover:bg-violet-50/30 transition-all">
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setScanLoading(true);
+                    setScanError(null);
+                    try {
+                      const formData = new FormData();
+                      formData.append('image', file);
+                      const res = await api.post('/vision/extract-product', formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                        timeout: 30000,
+                      });
+                      setScanResult({
+                        type: res.data.data.isNewProduct ? 'new_extracted' : 'existing_extracted',
+                        extracted: res.data.data.extracted,
+                        existingProduct: res.data.data.existingProduct,
+                        matchedCategoryId: res.data.data.matchedCategoryId,
+                        message: res.data.message,
+                      });
+                      setScanMode('result');
+                    } catch (err) {
+                      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to analyze image';
+                      setScanError(msg);
+                    } finally {
+                      setScanLoading(false);
+                      if (photoInputRef.current) photoInputRef.current.value = '';
+                    }
+                  }}
+                />
+                {scanLoading ? (
+                  <div className="py-6">
+                    <Loader2 className="w-12 h-12 mx-auto text-violet-600 animate-spin mb-4" />
+                    <p className="text-sm font-semibold text-violet-700">Analyzing medicine packaging...</p>
+                    <p className="text-xs text-slate-400 mt-1">This usually takes 3-5 seconds</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-violet-100 to-indigo-100 flex items-center justify-center mb-4">
+                      <ImageIcon className="w-8 h-8 text-violet-600" />
+                    </div>
+                    <p className="text-sm font-semibold text-slate-700 mb-1">
+                      Take a photo of the medicine packaging
+                    </p>
+                    <p className="text-xs text-slate-400 mb-4">
+                      Capture the side with name, dosage, expiry date, and batch number
+                    </p>
+                    <Button
+                      className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white text-sm font-bold px-6 py-2.5"
+                      onClick={() => photoInputRef.current?.click()}
+                    >
+                      <Camera className="w-4 h-4 mr-2" />
+                      Open Camera / Choose Photo
+                    </Button>
+                  </>
+                )}
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-xs text-amber-700 flex items-start gap-2">
+                  <Sparkles className="w-4 h-4 mt-0.5 shrink-0 text-amber-500" />
+                  <span>
+                    <strong>AI-Powered:</strong> The system uses Gemini Vision AI to read medicine packaging and
+                    extract product name, dosage, strength, expiry date, batch number, and more automatically.
+                  </span>
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Result Mode */}
+          {scanMode === 'result' && scanResult && (
+            <div className="space-y-4">
+              {/* Existing product found */}
+              {(scanResult.type === 'existing' || scanResult.type === 'existing_extracted') && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-600 mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-bold text-emerald-800">
+                        Product Already Exists
+                      </p>
+                      <p className="text-xs text-emerald-600 mt-1">{scanResult.message}</p>
+                      {(scanResult.product || scanResult.existingProduct) && (
+                        <div className="mt-3 bg-white rounded-lg p-3 border border-emerald-100">
+                          <p className="text-sm font-bold text-slate-800">
+                            {scanResult.product?.name || scanResult.existingProduct?.name}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Barcode: {scanResult.product?.barcode || scanResult.existingProduct?.barcode || '-'}
+                            {' · '}
+                            Stock: {scanResult.product?.totalStock ?? scanResult.existingProduct?.totalStock ?? 0} units
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* New product from barcode — prompt photo */}
+              {scanResult.type === 'new_barcode' && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-6 h-6 text-blue-600 mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-bold text-blue-800">New Product Detected</p>
+                      <p className="text-xs text-blue-600 mt-1">{scanResult.message}</p>
+                      <Button
+                        className="mt-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-4 py-2"
+                        onClick={() => {
+                          setScanMode('photo');
+                          setScanError(null);
+                        }}
+                      >
+                        <Camera className="w-3.5 h-3.5 mr-1.5" />
+                        Take Photo to Auto-Fill
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="mt-3 ml-2 text-xs font-bold px-4 py-2"
+                        onClick={() => {
+                          setScanModalOpen(false);
+                          setFormData({ ...formData, barcode: scanResult.barcode });
+                          openAddModal();
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1.5" />
+                        Add Manually
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* New product extracted from photo */}
+              {scanResult.type === 'new_extracted' && scanResult.extracted && (
+                <div className="space-y-3">
+                  <div className="bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Sparkles className="w-5 h-5 text-violet-600" />
+                      <p className="text-sm font-bold text-violet-800">AI Extraction Complete</p>
+                      {scanResult.extracted.confidence != null && (
+                        <Badge className={`ml-auto text-xs ${
+                          scanResult.extracted.confidence >= 0.8 ? 'bg-emerald-100 text-emerald-700' :
+                          scanResult.extracted.confidence >= 0.5 ? 'bg-amber-100 text-amber-700' :
+                          'bg-rose-100 text-rose-700'
+                        }`}>
+                          {Math.round(scanResult.extracted.confidence * 100)}% Confidence
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-violet-600 mb-3">{scanResult.message}</p>
+                  </div>
+
+                  {/* Extracted fields preview */}
+                  <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
+                    {[
+                      ['Name', scanResult.extracted.name],
+                      ['Name (Amharic)', scanResult.extracted.name_am],
+                      ['Type', scanResult.extracted.product_type],
+                      ['Generic Name', scanResult.extracted.generic_name],
+                      ['Dosage Form', scanResult.extracted.dosage_form],
+                      ['Strength', scanResult.extracted.strength],
+                      ['Brand', scanResult.extracted.brand],
+                      ['Manufacturer', scanResult.extracted.manufacturer],
+                      ['Unit Price (ETB)', scanResult.extracted.unit_price],
+                      ['Batch Number', scanResult.extracted.batch_number],
+                      ['Expiry Date', scanResult.extracted.expiry_date],
+                      ['Barcode', scanResult.extracted.barcode],
+                      ['Rx Required', scanResult.extracted.requires_prescription === true ? 'Yes' : scanResult.extracted.requires_prescription === false ? 'No' : null],
+                      ['Unit', scanResult.extracted.unit],
+                      ['Category', scanResult.extracted.category],
+                    ].filter(([, val]) => val != null && val !== '').map(([label, value]) => (
+                      <div key={label} className="flex items-center justify-between px-4 py-2">
+                        <span className="text-xs text-slate-500 font-medium">{label}</span>
+                        <span className="text-xs text-slate-800 font-semibold text-right max-w-[60%] truncate">{String(value)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <Button
+                      className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-bold py-2.5"
+                      onClick={() => {
+                        const ext = scanResult.extracted;
+                        setFormData({
+                          ...formData,
+                          name: ext.name || '',
+                          name_am: ext.name_am || '',
+                          product_type: ext.product_type || 'MEDICINE',
+                          generic_name: ext.generic_name || '',
+                          dosage_form: ext.dosage_form || '',
+                          strength: ext.strength || '',
+                          brand: ext.brand || '',
+                          manufacturer: ext.manufacturer || '',
+                          unit_price: ext.unit_price || '',
+                          batch_number: ext.batch_number || '',
+                          expiry_date: ext.expiry_date || '',
+                          barcode: ext.barcode || '',
+                          requires_prescription: ext.requires_prescription === true ? 'true' : 'false',
+                          unit: ext.unit || '',
+                          description: ext.description || '',
+                          category_id: scanResult.matchedCategoryId || '',
+                        });
+                        setScanModalOpen(false);
+                        setEditProduct(null);
+                        setProductModalOpen(true);
+                      }}
+                    >
+                      <Check className="w-4 h-4 mr-2" />
+                      Use This Data — Open Form
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="text-sm font-bold py-2.5"
+                      onClick={() => {
+                        setScanMode('photo');
+                        setScanResult(null);
+                      }}
+                    >
+                      <Camera className="w-4 h-4 mr-1.5" />
+                      Retake
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </Modal>
     </div>
   );
