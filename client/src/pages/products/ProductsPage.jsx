@@ -298,10 +298,38 @@ export const ProductsPage = () => {
         const batch_number = (r.Batch_Number || r.batch_number || r['Batch Number'] || '').trim();
         const expiry_date = (r.Expiry_Date || r.expiry_date || r['Expiry Date'] || '').trim();
         const quantityStr = (r.Quantity !== undefined ? r.Quantity : (r.quantity !== undefined ? r.quantity : (r.initial_quantity !== undefined ? r.initial_quantity : r['Qty'] || ''))).toString().trim();
-        const unit = (r.Unit || r.unit || r['Unit(bottle, stp, sachets, ampule)'] || r['Packaging Unit'] || '').trim();
+        let unit = (r.Unit || r.unit || r['Unit(bottle, stp, sachets, ampule)'] || r['Packaging Unit'] || '').trim();
         const dosage_form = (r.Dosage_Form || r.dosage_form || r['Dosage Form'] || '').trim();
         const strength = (r.Strength || r.strength || '').trim();
         const rxRaw = r.Requires_Prescription !== undefined ? r.Requires_Prescription : (r.requires_prescription !== undefined ? r.requires_prescription : r.requires_rx);
+
+        // Intelligent unit inference: If the file omitted Unit, infer from dosage_form so user isn't blocked
+        if (!unit) {
+          const df = (dosage_form || '').toLowerCase();
+          if (df.includes('tablet') || df.includes('capsule') || df.includes('pill') || df.includes('cap') || df.includes('tab')) {
+            unit = 'Strip';
+          } else if (
+            df.includes('syrup') ||
+            df.includes('suspension') ||
+            df.includes('solution') ||
+            df.includes('drop') ||
+            df.includes('lotion') ||
+            df.includes('shampoo') ||
+            df.includes('liquid')
+          ) {
+            unit = 'Bottle';
+          } else if (df.includes('injection')) {
+            unit = 'Vial';
+          } else if (df.includes('cream') || df.includes('ointment') || df.includes('gel')) {
+            unit = 'Tube';
+          } else if (df.includes('powder') || df.includes('sachet')) {
+            unit = 'Sachet';
+          } else if (type === 'COSMETIC') {
+            unit = 'Bottle';
+          } else if (dosage_form) {
+            unit = 'Strip';
+          }
+        }
 
         const rowErrors = [];
         if (!name) rowErrors.push('Missing Name');
@@ -365,22 +393,109 @@ export const ProductsPage = () => {
     reader.readAsText(file);
   };
 
-  const handleDownloadTemplate = async () => {
-    try {
-      const response = await api.get('/products/import-template', { responseType: 'blob' });
-      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.setAttribute('download', 'product_import_template.csv');
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(downloadUrl);
-    } catch (err) {
-      console.error('Blob download failed, falling back to direct link', err);
-      window.open(`${API_BASE}/products/import-template`, '_blank');
-    }
+  const handleDownloadTemplate = () => {
+    const headers = [
+      'Name',
+      'Name_Amharic',
+      'Product_Type',
+      'Category',
+      'Generic_Name',
+      'Dosage_Form',
+      'Strength',
+      'Brand',
+      'Manufacturer',
+      'Unit_Price_ETB',
+      'Reorder_Level',
+      'Barcode',
+      'SKU',
+      'Requires_Prescription',
+      'Expiry_Date',
+      'Batch_Number',
+      'Quantity',
+      'Unit',
+      'Description',
+    ];
+
+    const samples = [
+      [
+        'Amoxicillin 500mg',
+        'አሞክሲሊን 500mg',
+        'MEDICINE',
+        'Antibiotics',
+        'Amoxicillin',
+        'Capsule',
+        '500mg',
+        'Epharm',
+        'Ethiopian Pharmaceuticals',
+        '18.50',
+        '20',
+        'MED-AMX-500',
+        'MED-AMX-101',
+        'true',
+        '2027-08-31',
+        'BATCH-AMX-2025',
+        '100',
+        'Strip',
+        'Broad-spectrum antibiotic for bacterial infections',
+      ],
+      [
+        'Paracetamol 500mg',
+        'ፓራሲታሞል 500mg',
+        'MEDICINE',
+        'Pain Relief',
+        'Paracetamol',
+        'Tablet',
+        '500mg',
+        'Cadila',
+        'Cadila Pharmaceuticals',
+        '5.00',
+        '50',
+        'MED-PCM-500',
+        'MED-PCM-102',
+        'false',
+        '2028-01-15',
+        'BATCH-PCM-2025',
+        '250',
+        'Strip',
+        'Analgesic and antipyretic for pain and fever',
+      ],
+      [
+        'Nivea Soft Moisturizing Cream',
+        'ኒቪያ ሶፍት ክሬም',
+        'COSMETIC',
+        'Skincare',
+        '',
+        'Cream',
+        '200ml',
+        'Nivea',
+        'Beiersdorf',
+        '350.00',
+        '15',
+        '',
+        '',
+        'false',
+        '2026-12-31',
+        'BATCH-NIV-2024',
+        '30',
+        'Bottle',
+        'Refreshing soft moisturizing cream with Jojoba oil',
+      ],
+    ];
+
+    const csvContent = [
+      headers.join(','),
+      ...samples.map((row) => row.map((cell) => `"${cell}"`).join(',')),
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.setAttribute('download', 'product_import_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
   };
 
   const handleExecuteBulkImport = async () => {
